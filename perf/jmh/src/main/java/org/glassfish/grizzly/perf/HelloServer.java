@@ -18,6 +18,7 @@ import org.glassfish.grizzly.http.server.HttpHandler;
 import org.glassfish.grizzly.http.server.HttpServer;
 import org.glassfish.grizzly.http.server.Request;
 import org.glassfish.grizzly.http.server.Response;
+import org.glassfish.grizzly.http2.Http2AddOn;
 
 /**
  * Minimal plaintext/JSON server used as the load-test target in CI (TechEmpower-style endpoints).
@@ -61,6 +62,10 @@ public final class HelloServer {
                 response.getOutputStream().write(body);
             }
         }, "/");
+        if (Boolean.getBoolean("perf.h2")) {
+            // HTTP/2 over cleartext (prior knowledge or upgrade) next to HTTP/1.1
+            server.getListener("grizzly").registerAddOn(new Http2AddOn());
+        }
         server.start();
         System.out.println("READY " + port);
         Thread.currentThread().join();

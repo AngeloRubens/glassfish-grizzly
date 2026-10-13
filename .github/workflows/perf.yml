@@ -78,14 +78,14 @@ jobs:
     - name: Build baseline Grizzly + benchmarks
       run: |
         echo "base: $(git -C base rev-parse HEAD)" | tee -a $GITHUB_STEP_SUMMARY
-        mvn $MVN_SKIP -q install -pl modules/http-server -am -f base/pom.xml
+        mvn $MVN_SKIP -q install -pl modules/http-server,modules/http2 -am -f base/pom.xml
         GV=$(mvn -B -ntp -q -N help:evaluate -Dexpression=project.version -DforceStdout -f base/pom.xml)
         mvn -B -ntp -q package -Dgrizzly.version=$GV -f harness/perf/jmh/pom.xml
         mkdir -p jars && cp harness/perf/jmh/target/benchmarks.jar jars/base.jar
     - name: Build head Grizzly + benchmarks
       run: |
         echo "head: $(git -C head rev-parse HEAD)" | tee -a $GITHUB_STEP_SUMMARY
-        mvn $MVN_SKIP -q install -pl modules/http-server -am -f head/pom.xml
+        mvn $MVN_SKIP -q install -pl modules/http-server,modules/http2 -am -f head/pom.xml
         GV=$(mvn -B -ntp -q -N help:evaluate -Dexpression=project.version -DforceStdout -f head/pom.xml)
         mvn -B -ntp -q clean package -Dgrizzly.version=$GV -f harness/perf/jmh/pom.xml
         cp harness/perf/jmh/target/benchmarks.jar jars/head.jar
@@ -162,7 +162,7 @@ jobs:
         java-version: 21
     - name: Tools
       run: |
-        sudo apt-get install -y -qq wrk > /dev/null
+        sudo apt-get install -y -qq wrk nghttp2-client > /dev/null
         sudo sysctl -w kernel.perf_event_paranoid=1 kernel.kptr_restrict=0
         curl -sSfL https://github.com/async-profiler/async-profiler/releases/download/v$ASYNC_PROFILER_VERSION/async-profiler-$ASYNC_PROFILER_VERSION-linux-x64.tar.gz | tar xz
         mv async-profiler-$ASYNC_PROFILER_VERSION-linux-x64 ap
@@ -196,12 +196,27 @@ jobs:
           local reqs=$(awk '/requests in/ {print $1}' wrk-$v-$s.txt)
           echo "$v $s $(grep Requests/sec wrk-$v-$s.txt | awk '{print $2}') $reqs $((u1 - u0)) $((s1 - s0)) $TCK $((v1 - v0)) $((n1 - n0))" >> rps.txt
         }
+        run_h2() { # variant scenario: HTTP/2 cleartext (prior knowledge) with h2load, 32 connections x 16 streams
+          local v=$1 s=$2
+          taskset -c 0,1 java $JVM -Dperf.h2=true -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > server-$v.log 2>&1 &
+          local pid=$!
+          for i in $(seq 1 50); do grep -q READY server-$v.log && break; sleep 0.2; done
+          taskset -c 2,3 h2load -t2 -c32 -m16 -D10 http://127.0.0.1:8080/plaintext > /dev/null
+          read u0 s0 < <(cpu $pid); read v0 n0 < <(csw $pid)
+          taskset -c 2,3 h2load -t2 -c32 -m16 -D20 http://127.0.0.1:8080/plaintext > h2load-$v-$s.txt
+          read u1 s1 < <(cpu $pid); read v1 n1 < <(csw $pid)
+          kill $pid; wait $pid || true
+          local reqs=$(awk '/^requests:/ {print $2}' h2load-$v-$s.txt)
+          local rps=$(awk '/^finished in/ {print $4}' h2load-$v-$s.txt)
+          echo "$v $s $rps $reqs $((u1 - u0)) $((s1 - s0)) $TCK $((v1 - v0)) $((n1 - n0))" >> rps.txt
+        }
         scenarios() {
           run $1 plaintext http://127.0.0.1:8080/plaintext
           run $1 plaintext-pipelined16 -s pipeline.lua http://127.0.0.1:8080/plaintext -- 16
           run $1 json http://127.0.0.1:8080/json
           run $1 text http://127.0.0.1:8080/text
           run $1 plaintext-browser-headers "${BROWSER_HEADERS[@]}" "http://127.0.0.1:8080/static/js/app.bundle.js?v=20261013&lang=it"
+          run_h2 $1 h2-plaintext
         }
         # a typical browser request: 14 header fields, ~700 bytes
         BROWSER_HEADERS=(
@@ -273,10 +288,24 @@ jobs:
         ap/bin/asprof -d 20 -e cpu -i 997us -o collapsed -f $PWD/cpu-text-head.collapsed $pid
         wait $wrkpid || true
         kill $pid; wait $pid || true
+        # HTTP/2 cleartext with h2load, head only
+        taskset -c 0,1 java -Xms512m -Xmx512m -XX:+UseParallelGC -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints \
+            -Dperf.h2=true -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > prof-h2.log 2>&1 &
+        pid=$!
+        for i in $(seq 1 50); do grep -q READY prof-h2.log && break; sleep 0.2; done
+        taskset -c 2,3 h2load -t2 -c32 -m16 -D50 http://127.0.0.1:8080/plaintext > /dev/null &
+        h2pid=$!
+        sleep 10
+        ap/bin/asprof -d 20 -e cpu -i 997us -o collapsed -f $PWD/cpu-h2-head.collapsed $pid
+        ap/bin/asprof -d 15 -e alloc -o collapsed -f $PWD/alloc-h2-head.collapsed $pid
+        wait $h2pid || true
+        kill $pid; wait $pid || true
         {
           echo "## CPU profile (head, pipelined plaintext)"; python3 scripts/top_frames.py cpu-head.collapsed 30
           echo "## Allocation profile (head)"; python3 scripts/top_frames.py alloc-head.collapsed 20
           echo "## CPU profile (head, /text through the Writer)"; python3 scripts/top_frames.py cpu-text-head.collapsed 30
+          echo "## CPU profile (head, HTTP/2 h2c)"; python3 scripts/top_frames.py cpu-h2-head.collapsed 30
+          echo "## Allocation profile (head, HTTP/2 h2c)"; python3 scripts/top_frames.py alloc-h2-head.collapsed 20
         } >> $GITHUB_STEP_SUMMARY
     - uses: actions/upload-artifact@v4
       if: always()
