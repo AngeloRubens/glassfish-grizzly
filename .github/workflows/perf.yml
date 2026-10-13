@@ -105,7 +105,7 @@ jobs:
     - name: Run benchmarks (base, head, interleaved by class)
       run: |
         set -e
-        for b in HttpRequestDecodeBenchmark HttpHeaderEncodeBenchmark; do
+        for b in HttpRequestDecodeBenchmark HttpHeaderEncodeBenchmark AttributeHolderBenchmark; do
           for v in base head; do
             java -jar $v.jar "$b" -prof gc -rf json -rff "$v-$b.json" ${{ inputs.jmh_args }} | tail -25
           done
