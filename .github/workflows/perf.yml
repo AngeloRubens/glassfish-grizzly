@@ -1,0 +1,224 @@
+#
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# This program and the accompanying materials are made available under the
+# terms of the Eclipse Public License v. 2.0 which is available at
+# http://www.eclipse.org/legal/epl-2.0,
+# or the Eclipse Distribution License v. 1.0 which is available at
+# http://www.eclipse.org/org/documents/edl-v10.php.
+#
+# SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
+#
+
+# A/B performance measurements: baseline (upstream ref) vs this commit.
+#  - jmh:  micro-benchmarks of HTTP codec hot paths (perf/jmh), with GC allocation profiling
+#  - load: wrk against a hello-world HttpServer + async-profiler CPU/alloc flame graphs
+# Results land in the job summaries and as artifacts.
+
+name: Grizzly performance
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_repo:
+        description: Baseline repository
+        default: eclipse-ee4j/glassfish-grizzly
+      base_ref:
+        description: Baseline ref
+        default: main
+      jmh_args:
+        description: Extra JMH arguments
+        default: ""
+  push:
+    branches: [ "perf/**" ]
+
+env:
+  MAVEN_VERSION: 3.9.16
+  BASE_REPO: ${{ inputs.base_repo || 'eclipse-ee4j/glassfish-grizzly' }}
+  BASE_REF: ${{ inputs.base_ref || 'main' }}
+  ASYNC_PROFILER_VERSION: "3.0"
+  MVN_SKIP: >-
+    -B -ntp -DskipTests -Dmaven.javadoc.skip=true -Dcheckstyle.skip -Dcopyright.skip -Dspotbugs.skip
+    -Denforcer.skip
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build baseline and head
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        path: head
+    - uses: actions/checkout@v6
+      with:
+        repository: ${{ env.BASE_REPO }}
+        ref: ${{ env.BASE_REF }}
+        path: base
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 21
+    - name: Install Maven
+      run: |
+        curl -sSfo maven.tgz https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/$MAVEN_VERSION/apache-maven-$MAVEN_VERSION-bin.tar.gz
+        tar -xf maven.tgz
+        echo "$PWD/apache-maven-$MAVEN_VERSION/bin" >> $GITHUB_PATH
+    - name: Build baseline Grizzly + benchmarks
+      run: |
+        echo "base: $(git -C base rev-parse HEAD)" | tee -a $GITHUB_STEP_SUMMARY
+        mvn $MVN_SKIP -q install -pl modules/http-server -am -f base/pom.xml
+        GV=$(mvn -B -ntp -q -N help:evaluate -Dexpression=project.version -DforceStdout -f base/pom.xml)
+        mvn -B -ntp -q package -Dgrizzly.version=$GV -f head/perf/jmh/pom.xml
+        mkdir -p jars && cp head/perf/jmh/target/benchmarks.jar jars/base.jar
+    - name: Build head Grizzly + benchmarks
+      run: |
+        echo "head: $(git -C head rev-parse HEAD)" | tee -a $GITHUB_STEP_SUMMARY
+        mvn $MVN_SKIP -q install -pl modules/http-server -am -f head/pom.xml
+        GV=$(mvn -B -ntp -q -N help:evaluate -Dexpression=project.version -DforceStdout -f head/pom.xml)
+        mvn -B -ntp -q clean package -Dgrizzly.version=$GV -f head/perf/jmh/pom.xml
+        cp head/perf/jmh/target/benchmarks.jar jars/head.jar
+        cp -r head/perf/scripts jars/
+    - uses: actions/upload-artifact@v4
+      with:
+        name: jars
+        path: jars
+
+  jmh:
+    name: JMH A/B
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: jars
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 21
+    - name: Environment
+      run: |
+        { echo '```'; lscpu | grep -E 'Model name|^CPU\(s\)|Thread|MHz'; java -version 2>&1; echo '```'; } >> $GITHUB_STEP_SUMMARY
+    - name: Run benchmarks (base, head, interleaved by class)
+      run: |
+        set -e
+        for b in HttpRequestDecodeBenchmark HttpHeaderEncodeBenchmark; do
+          for v in base head; do
+            java -jar $v.jar "$b" -prof gc -rf json -rff "$v-$b.json" ${{ inputs.jmh_args }} | tail -25
+          done
+        done
+        python3 - <<'EOF'
+        import glob, json
+        for v in ("base", "head"):
+            rows = []
+            for f in sorted(glob.glob(f"{v}-*.json")):
+                rows += json.load(open(f))
+            json.dump(rows, open(f"{v}.json", "w"))
+        EOF
+    - name: Compare
+      run: |
+        { echo "## JMH: base vs head (avgt, lower is better)"; python3 scripts/jmh_compare.py base.json head.json; } >> $GITHUB_STEP_SUMMARY
+    - uses: actions/upload-artifact@v4
+      with:
+        name: jmh-results
+        path: "*.json"
+
+  load:
+    name: Load test + async-profiler
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: jars
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 21
+    - name: Tools
+      run: |
+        sudo apt-get install -y -qq wrk > /dev/null
+        sudo sysctl -w kernel.perf_event_paranoid=1 kernel.kptr_restrict=0
+        curl -sSfL https://github.com/async-profiler/async-profiler/releases/download/v$ASYNC_PROFILER_VERSION/async-profiler-$ASYNC_PROFILER_VERSION-linux-x64.tar.gz | tar xz
+        mv async-profiler-$ASYNC_PROFILER_VERSION-linux-x64 ap
+        cat > pipeline.lua <<'EOF'
+        init = function(args)
+          local depth = tonumber(args[1]) or 16
+          local r = {}
+          for i = 1, depth do r[i] = wrk.format(nil, wrk.path) end
+          req = table.concat(r)
+        end
+        request = function() return req end
+        EOF
+        nproc
+    - name: Throughput A/B
+      run: |
+        set -e
+        JVM="-Xms512m -Xmx512m -XX:+UseParallelGC"
+        run() { # variant scenario wrk-args...
+          local v=$1 s=$2; shift 2
+          taskset -c 0,1 java $JVM -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > server-$v.log 2>&1 &
+          local pid=$!
+          for i in $(seq 1 50); do grep -q READY server-$v.log && break; sleep 0.2; done
+          taskset -c 2,3 wrk -t2 -c64 -d10s "$@" > /dev/null          # warm-up
+          taskset -c 2,3 wrk -t2 -c64 -d20s "$@" > wrk-$v-$s.txt
+          kill $pid; wait $pid || true
+          echo "$v $s $(grep Requests/sec wrk-$v-$s.txt | awk '{print $2}') $(grep -A1 Latency wrk-$v-$s.txt | head -1 | awk '{print $2}')" >> rps.txt
+        }
+        for round in 1 2; do
+          for v in base head; do
+            run $v plaintext http://127.0.0.1:8080/plaintext
+            run $v plaintext-pipelined16 -s pipeline.lua http://127.0.0.1:8080/plaintext -- 16
+            run $v json http://127.0.0.1:8080/json
+          done
+        done
+        python3 - <<'EOF' >> $GITHUB_STEP_SUMMARY
+        import collections
+        d = collections.defaultdict(list)
+        for line in open("rps.txt"):
+            v, s, rps, lat = line.split()
+            d[(s, v)].append(float(rps))
+        print("## wrk throughput (req/s, best of 2 rounds; server on 2 CPUs, wrk on 2 CPUs)\n")
+        print("| scenario | base | head | Δ |\n|---|---:|---:|---:|")
+        for s in sorted({k[0] for k in d}):
+            b, h = max(d[(s, "base")]), max(d[(s, "head")])
+            print(f"| {s} | {b:,.0f} | {h:,.0f} | {(h - b) / b * 100:+.1f}% |")
+        EOF
+    - name: Profile head (CPU + alloc)
+      run: |
+        set -e
+        prof() { # variant
+          local v=$1
+          taskset -c 0,1 java -Xms512m -Xmx512m -XX:+UseParallelGC -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints \
+              -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > prof-$v.log 2>&1 &
+          local pid=$!
+          for i in $(seq 1 50); do grep -q READY prof-$v.log && break; sleep 0.2; done
+          taskset -c 2,3 wrk -t2 -c64 -d75s -s pipeline.lua http://127.0.0.1:8080/plaintext -- 16 > /dev/null &
+          local wrk=$!
+          sleep 10
+          ap/bin/asprof -d 20 -e cpu -i 997us -o collapsed -f $PWD/cpu-$v.collapsed $pid
+          ap/bin/asprof -d 15 -e cpu -i 997us -f $PWD/cpu-$v.html $pid
+          ap/bin/asprof -d 15 -e alloc -o collapsed -f $PWD/alloc-$v.collapsed $pid
+          ap/bin/asprof -d 10 -e alloc -f $PWD/alloc-$v.html $pid
+          wait $wrk || true
+          kill $pid; wait $pid || true
+        }
+        prof base
+        prof head
+        {
+          echo "## CPU profile (head, pipelined plaintext)"; python3 scripts/top_frames.py cpu-head.collapsed 30
+          echo "## Allocation profile (head)"; python3 scripts/top_frames.py alloc-head.collapsed 20
+        } >> $GITHUB_STEP_SUMMARY
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: profiles
+        path: |
+          *.html
+          *.collapsed
+          wrk-*.txt
+          rps.txt
+          *.log
