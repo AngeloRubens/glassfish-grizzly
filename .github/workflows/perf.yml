@@ -101,7 +101,7 @@ jobs:
         java-version: 21
     - name: Environment
       run: |
-        { echo '```'; lscpu | grep -E 'Model name|^CPU\(s\)|Thread|MHz'; java -version 2>&1; echo '```'; } >> $GITHUB_STEP_SUMMARY
+        { echo '```'; lscpu | grep -E 'Model name|^CPU\(s\)|Thread|MHz'; java -version 2>&1; echo '```'; } | tee -a $GITHUB_STEP_SUMMARY
     - name: Run benchmarks (base, head, interleaved by class)
       run: |
         set -e
@@ -121,10 +121,24 @@ jobs:
     - name: Compare
       run: |
         { echo "## JMH: base vs head (avgt, lower is better)"; python3 scripts/jmh_compare.py base.json head.json; } >> $GITHUB_STEP_SUMMARY
+    - name: Profile head decode (async-profiler via JMH)
+      continue-on-error: true
+      run: |
+        sudo sysctl -w kernel.perf_event_paranoid=1 kernel.kptr_restrict=0
+        curl -sSfL https://github.com/async-profiler/async-profiler/releases/download/v$ASYNC_PROFILER_VERSION/async-profiler-$ASYNC_PROFILER_VERSION-linux-x64.tar.gz | tar xz
+        AP=$PWD/async-profiler-$ASYNC_PROFILER_VERSION-linux-x64/lib/libasyncProfiler.so
+        java -jar head.jar HttpRequestDecodeBenchmark -p request=browser -f 1 -wi 3 -i 3 \
+            -jvmArgsAppend "-XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints" \
+            -prof "async:libPath=$AP;output=collapsed;dir=$PWD/jmh-prof" | tail -5
+        f=$(find jmh-prof -name '*.csv' -o -name 'collapsed*' | head -1); echo "profile: $f"
+        { echo "## JMH decode[browser] CPU profile (head)"; python3 scripts/top_frames.py "$f" 30; } >> $GITHUB_STEP_SUMMARY
+        cp "$f" decode-browser.collapsed
     - uses: actions/upload-artifact@v4
       with:
         name: jmh-results
-        path: "*.json"
+        path: |
+          *.json
+          *.collapsed
 
   load:
     name: Load test + async-profiler
@@ -158,34 +172,45 @@ jobs:
       run: |
         set -e
         JVM="-Xms512m -Xmx512m -XX:+UseParallelGC"
+        TCK=$(getconf CLK_TCK)
+        cpu() { awk '{print $14, $15}' /proc/$1/stat; } # utime stime (ticks, all threads)
         run() { # variant scenario wrk-args...
           local v=$1 s=$2; shift 2
           taskset -c 0,1 java $JVM -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > server-$v.log 2>&1 &
           local pid=$!
           for i in $(seq 1 50); do grep -q READY server-$v.log && break; sleep 0.2; done
           taskset -c 2,3 wrk -t2 -c64 -d10s "$@" > /dev/null          # warm-up
+          read u0 s0 < <(cpu $pid)
           taskset -c 2,3 wrk -t2 -c64 -d20s "$@" > wrk-$v-$s.txt
+          read u1 s1 < <(cpu $pid)
           kill $pid; wait $pid || true
-          echo "$v $s $(grep Requests/sec wrk-$v-$s.txt | awk '{print $2}') $(grep -A1 Latency wrk-$v-$s.txt | head -1 | awk '{print $2}')" >> rps.txt
+          local reqs=$(awk '/requests in/ {print $1}' wrk-$v-$s.txt)
+          echo "$v $s $(grep Requests/sec wrk-$v-$s.txt | awk '{print $2}') $reqs $((u1 - u0)) $((s1 - s0)) $TCK" >> rps.txt
         }
-        for round in 1 2; do
-          for v in base head; do
-            run $v plaintext http://127.0.0.1:8080/plaintext
-            run $v plaintext-pipelined16 -s pipeline.lua http://127.0.0.1:8080/plaintext -- 16
-            run $v json http://127.0.0.1:8080/json
-          done
+        scenarios() {
+          run $1 plaintext http://127.0.0.1:8080/plaintext
+          run $1 plaintext-pipelined16 -s pipeline.lua http://127.0.0.1:8080/plaintext -- 16
+          run $1 json http://127.0.0.1:8080/json
+        }
+        for round in 1 2 3; do # ABBA ordering cancels linear drift
+          if [ $((round % 2)) = 1 ]; then scenarios base; scenarios head; else scenarios head; scenarios base; fi
         done
         python3 - <<'EOF' >> $GITHUB_STEP_SUMMARY
-        import collections
+        import collections, statistics
         d = collections.defaultdict(list)
         for line in open("rps.txt"):
-            v, s, rps, lat = line.split()
-            d[(s, v)].append(float(rps))
-        print("## wrk throughput (req/s, best of 2 rounds; server on 2 CPUs, wrk on 2 CPUs)\n")
-        print("| scenario | base | head | Δ |\n|---|---:|---:|---:|")
+            v, s, rps, reqs, ut, st, tck = line.split()
+            reqs, tck = int(reqs), int(tck)
+            d[(s, v)].append((float(rps), int(ut) / tck / reqs * 1e6, int(st) / tck / reqs * 1e6))
+        print("## wrk A/B (median of 3 ABBA rounds; server on 2 CPUs, wrk on 2 CPUs)\n")
+        print("server CPU per request in µs (user = JVM, sys = kernel); lower is better\n")
+        print("| scenario | req/s base | req/s head | Δ | user µs/req base | head | Δ | sys µs/req base | head |")
+        print("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
         for s in sorted({k[0] for k in d}):
-            b, h = max(d[(s, "base")]), max(d[(s, "head")])
-            print(f"| {s} | {b:,.0f} | {h:,.0f} | {(h - b) / b * 100:+.1f}% |")
+            b = [statistics.median(x) for x in zip(*d[(s, "base")])]
+            h = [statistics.median(x) for x in zip(*d[(s, "head")])]
+            print(f"| {s} | {b[0]:,.0f} | {h[0]:,.0f} | {(h[0] - b[0]) / b[0] * 100:+.1f}% "
+                  f"| {b[1]:.2f} | {h[1]:.2f} | {(h[1] - b[1]) / b[1] * 100:+.1f}% | {b[2]:.2f} | {h[2]:.2f} |")
         EOF
     - name: Profile head (CPU + alloc)
       run: |
