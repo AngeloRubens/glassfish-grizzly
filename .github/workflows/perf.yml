@@ -201,7 +201,25 @@ jobs:
           run $1 plaintext-pipelined16 -s pipeline.lua http://127.0.0.1:8080/plaintext -- 16
           run $1 json http://127.0.0.1:8080/json
           run $1 text http://127.0.0.1:8080/text
+          run $1 plaintext-browser-headers "${BROWSER_HEADERS[@]}" "http://127.0.0.1:8080/static/js/app.bundle.js?v=20261013&lang=it"
         }
+        # a typical browser request: 14 header fields, ~700 bytes
+        BROWSER_HEADERS=(
+          -H 'Connection: keep-alive'
+          -H 'sec-ch-ua: "Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"'
+          -H 'sec-ch-ua-mobile: ?0'
+          -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+          -H 'sec-ch-ua-platform: "Linux"'
+          -H 'Accept: */*'
+          -H 'Sec-Fetch-Site: same-origin'
+          -H 'Sec-Fetch-Mode: no-cors'
+          -H 'Sec-Fetch-Dest: script'
+          -H 'Referer: https://www.example.com/catalog/products?page=2&sort=price'
+          -H 'Accept-Encoding: gzip, deflate, br, zstd'
+          -H 'Accept-Language: it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7'
+          -H 'Cookie: JSESSIONID=8F3A2B1C9D0E4F5A6B7C8D9E0F1A2B3C; _ga=GA1.1.123456789.1700000000; theme=dark; consent=yes'
+          -H 'If-None-Match: "5d8c72a5edda8d6a:0"'
+        )
         for round in 1 2 3; do # ABBA ordering cancels linear drift
           if [ $((round % 2)) = 1 ]; then scenarios base; scenarios head; else scenarios head; scenarios base; fi
         done
