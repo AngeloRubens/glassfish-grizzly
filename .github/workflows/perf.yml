@@ -26,6 +26,9 @@ on:
       base_ref:
         description: Baseline ref
         default: main
+      head_ref:
+        description: "Head ref of this repository to measure (default = the workflow commit); the benchmark harness always comes from the workflow commit"
+        default: ""
       jmh_args:
         description: Extra JMH arguments
         default: ""
@@ -36,13 +39,14 @@ env:
   MAVEN_VERSION: 3.9.16
   BASE_REPO: ${{ inputs.base_repo || 'eclipse-ee4j/glassfish-grizzly' }}
   BASE_REF: ${{ inputs.base_ref || 'main' }}
+  HEAD_REF: ${{ inputs.head_ref || github.sha }}
   ASYNC_PROFILER_VERSION: "3.0"
   MVN_SKIP: >-
     -B -ntp -DskipTests -Dmaven.javadoc.skip=true -Dcheckstyle.skip -Dcopyright.skip -Dspotbugs.skip
     -Denforcer.skip
 
 concurrency:
-  group: perf-${{ github.ref }}
+  group: perf-${{ github.ref }}-${{ inputs.head_ref }}
   cancel-in-progress: true
 
 jobs:
@@ -52,6 +56,10 @@ jobs:
     steps:
     - uses: actions/checkout@v6
       with:
+        path: harness
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ env.HEAD_REF }}
         path: head
     - uses: actions/checkout@v6
       with:
@@ -72,16 +80,16 @@ jobs:
         echo "base: $(git -C base rev-parse HEAD)" | tee -a $GITHUB_STEP_SUMMARY
         mvn $MVN_SKIP -q install -pl modules/http-server -am -f base/pom.xml
         GV=$(mvn -B -ntp -q -N help:evaluate -Dexpression=project.version -DforceStdout -f base/pom.xml)
-        mvn -B -ntp -q package -Dgrizzly.version=$GV -f head/perf/jmh/pom.xml
-        mkdir -p jars && cp head/perf/jmh/target/benchmarks.jar jars/base.jar
+        mvn -B -ntp -q package -Dgrizzly.version=$GV -f harness/perf/jmh/pom.xml
+        mkdir -p jars && cp harness/perf/jmh/target/benchmarks.jar jars/base.jar
     - name: Build head Grizzly + benchmarks
       run: |
         echo "head: $(git -C head rev-parse HEAD)" | tee -a $GITHUB_STEP_SUMMARY
         mvn $MVN_SKIP -q install -pl modules/http-server -am -f head/pom.xml
         GV=$(mvn -B -ntp -q -N help:evaluate -Dexpression=project.version -DforceStdout -f head/pom.xml)
-        mvn -B -ntp -q clean package -Dgrizzly.version=$GV -f head/perf/jmh/pom.xml
-        cp head/perf/jmh/target/benchmarks.jar jars/head.jar
-        cp -r head/perf/scripts jars/
+        mvn -B -ntp -q clean package -Dgrizzly.version=$GV -f harness/perf/jmh/pom.xml
+        cp harness/perf/jmh/target/benchmarks.jar jars/head.jar
+        cp -r harness/perf/scripts jars/
     - uses: actions/upload-artifact@v4
       with:
         name: jars
