@@ -28,12 +28,31 @@ public final class HelloServer {
     private static final byte[] HELLO = "Hello, World!".getBytes(StandardCharsets.US_ASCII);
     private static final byte[] JSON = "{\"message\":\"Hello, World!\"}".getBytes(StandardCharsets.US_ASCII);
 
+    /** ~2 KB of ASCII HTML, like a small server-rendered fragment. */
+    static final String PAGE;
+
+    static {
+        final StringBuilder sb = new StringBuilder("<!DOCTYPE html><html><head><title>Fortunes</title></head><body><table>"
+                + "<tr><th>id</th><th>message</th></tr>");
+        for (int i = 1; sb.length() < 2000; i++) {
+            sb.append("<tr><td>").append(i).append("</td><td>A computer scientist is someone who fixes things that aren't broken.</td></tr>");
+        }
+        PAGE = sb.append("</table></body></html>").toString();
+    }
+
     public static void main(final String[] args) throws Exception {
         final int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
         final HttpServer server = HttpServer.createSimpleServer(null, "0.0.0.0", port);
         server.getServerConfiguration().addHttpHandler(new HttpHandler() {
             @Override
             public void service(final Request request, final Response response) throws Exception {
+                if (request.getRequestURI().startsWith("/text")) {
+                    // character output through the Writer (char -> UTF-8 encoding path)
+                    response.setContentType("text/html;charset=UTF-8");
+                    response.setHeader("Server", "grizzly");
+                    response.getWriter().write(PAGE);
+                    return;
+                }
                 final boolean json = request.getRequestURI().startsWith("/json");
                 final byte[] body = json ? JSON : HELLO;
                 response.setContentType(json ? "application/json" : "text/plain");

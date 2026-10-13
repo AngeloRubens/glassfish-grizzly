@@ -182,23 +182,25 @@ jobs:
         JVM="-Xms512m -Xmx512m -XX:+UseParallelGC"
         TCK=$(getconf CLK_TCK)
         cpu() { awk '{print $14, $15}' /proc/$1/stat; } # utime stime (ticks, all threads)
+        csw() { cat /proc/$1/task/*/status 2>/dev/null | awk '/^voluntary_ctxt_switches/ {v+=$2} /^nonvoluntary_ctxt_switches/ {n+=$2} END {print v+0, n+0}'; }
         run() { # variant scenario wrk-args...
           local v=$1 s=$2; shift 2
           taskset -c 0,1 java $JVM -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > server-$v.log 2>&1 &
           local pid=$!
           for i in $(seq 1 50); do grep -q READY server-$v.log && break; sleep 0.2; done
           taskset -c 2,3 wrk -t2 -c64 -d10s "$@" > /dev/null          # warm-up
-          read u0 s0 < <(cpu $pid)
+          read u0 s0 < <(cpu $pid); read v0 n0 < <(csw $pid)
           taskset -c 2,3 wrk -t2 -c64 -d20s "$@" > wrk-$v-$s.txt
-          read u1 s1 < <(cpu $pid)
+          read u1 s1 < <(cpu $pid); read v1 n1 < <(csw $pid)
           kill $pid; wait $pid || true
           local reqs=$(awk '/requests in/ {print $1}' wrk-$v-$s.txt)
-          echo "$v $s $(grep Requests/sec wrk-$v-$s.txt | awk '{print $2}') $reqs $((u1 - u0)) $((s1 - s0)) $TCK" >> rps.txt
+          echo "$v $s $(grep Requests/sec wrk-$v-$s.txt | awk '{print $2}') $reqs $((u1 - u0)) $((s1 - s0)) $TCK $((v1 - v0)) $((n1 - n0))" >> rps.txt
         }
         scenarios() {
           run $1 plaintext http://127.0.0.1:8080/plaintext
           run $1 plaintext-pipelined16 -s pipeline.lua http://127.0.0.1:8080/plaintext -- 16
           run $1 json http://127.0.0.1:8080/json
+          run $1 text http://127.0.0.1:8080/text
         }
         for round in 1 2 3; do # ABBA ordering cancels linear drift
           if [ $((round % 2)) = 1 ]; then scenarios base; scenarios head; else scenarios head; scenarios base; fi
@@ -207,18 +209,19 @@ jobs:
         import collections, statistics
         d = collections.defaultdict(list)
         for line in open("rps.txt"):
-            v, s, rps, reqs, ut, st, tck = line.split()
+            v, s, rps, reqs, ut, st, tck, vcs, ncs = line.split()
             reqs, tck = int(reqs), int(tck)
-            d[(s, v)].append((float(rps), int(ut) / tck / reqs * 1e6, int(st) / tck / reqs * 1e6))
+            d[(s, v)].append((float(rps), int(ut) / tck / reqs * 1e6, int(st) / tck / reqs * 1e6,
+                              (int(vcs) + int(ncs)) / reqs))
         print("## wrk A/B (median of 3 ABBA rounds; server on 2 CPUs, wrk on 2 CPUs)\n")
         print("server CPU per request in µs (user = JVM, sys = kernel); lower is better\n")
-        print("| scenario | req/s base | req/s head | Δ | user µs/req base | head | Δ | sys µs/req base | head |")
-        print("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+        print("| scenario | req/s base | req/s head | Δ | user µs/req base | head | Δ | sys µs/req base | head | ctx switch/req base | head |")
+        print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
         for s in sorted({k[0] for k in d}):
             b = [statistics.median(x) for x in zip(*d[(s, "base")])]
             h = [statistics.median(x) for x in zip(*d[(s, "head")])]
             print(f"| {s} | {b[0]:,.0f} | {h[0]:,.0f} | {(h[0] - b[0]) / b[0] * 100:+.1f}% "
-                  f"| {b[1]:.2f} | {h[1]:.2f} | {(h[1] - b[1]) / b[1] * 100:+.1f}% | {b[2]:.2f} | {h[2]:.2f} |")
+                  f"| {b[1]:.2f} | {h[1]:.2f} | {(h[1] - b[1]) / b[1] * 100:+.1f}% | {b[2]:.2f} | {h[2]:.2f} | {b[3]:.2f} | {h[3]:.2f} |")
         EOF
     - name: Profile head (CPU + alloc)
       run: |
@@ -255,3 +258,37 @@ jobs:
           wrk-*.txt
           rps.txt
           *.log
+
+  type-pollution:
+    name: Type pollution (secondary super cache)
+    runs-on: ubuntu-latest
+    needs: build
+    continue-on-error: true
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: jars
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 21
+    - name: Build type-pollution-agent
+      run: |
+        sudo apt-get install -y -qq wrk maven > /dev/null
+        git clone -q --depth 1 https://github.com/RedHatPerf/type-pollution-agent.git tpa
+        mvn -B -ntp -q package -DskipTests -f tpa/pom.xml
+        ls tpa/agent/target/*.jar
+    - name: Load test head with the agent
+      run: |
+        AGENT=$(ls tpa/agent/target/type-pollution-agent-*.jar | grep -v sources | head -1)
+        java -javaagent:$AGENT=org.glassfish.grizzly -Xmx512m -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > tpa.log 2>&1 &
+        pid=$!
+        for i in $(seq 1 100); do grep -q READY tpa.log && break; sleep 0.2; done
+        wrk -t2 -c64 -d20s http://127.0.0.1:8080/plaintext > /dev/null
+        wrk -t2 -c64 -d10s -H 'Connection: keep-alive' http://127.0.0.1:8080/text > /dev/null
+        kill $pid; wait $pid || true
+        { echo "## Type pollution report (head, plaintext + text load)"; echo '```'; sed -n '/Type Pollution Statistics/,$p' tpa.log | head -150; echo '```'; } >> $GITHUB_STEP_SUMMARY
+    - uses: actions/upload-artifact@v4
+      with:
+        name: type-pollution
+        path: tpa.log
