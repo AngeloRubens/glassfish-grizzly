@@ -347,18 +347,17 @@ public class HttpCodecUtils {
         dstBuffer = checkAndResizeIfNeeded(memoryManager, dstBuffer, size);
 
         if (dstBuffer.hasArray()) {
-            @SuppressWarnings("MismatchedReadAndWriteOfArray")
             final byte[] array = dstBuffer.array();
             final int arrayOffs = dstBuffer.arrayOffset();
-            int pos = arrayOffs + dstBuffer.position();
+            final int pos = arrayOffs + dstBuffer.position();
 
-            // Make sure custom Strings do not contain service symbols
-            for (int i = 0; i < size; i++) {
-                byte b = (byte) s.charAt(i);
-                array[pos++] = isNonPrintableUsAscii(b) ? Constants.SP : b;
-            }
+            // Bulk-copy the low 8 bits of each char (a plain array copy for Latin-1 strings), the same
+            // truncation as (byte) s.charAt(i)...
+            copyLowBytes(s, size, array, pos);
+            // ...then make sure custom Strings do not contain service symbols
+            replaceNonPrintable(array, pos, pos + size);
 
-            dstBuffer.position(pos - arrayOffs);
+            dstBuffer.position(pos + size - arrayOffs);
         } else {
             fastAsciiEncode(s, tempBuffer, dstBuffer);
         }
@@ -468,6 +467,24 @@ public class HttpCodecUtils {
      */
     public static boolean isNonPrintableUsAscii(final int ub) {
         return ub <= 31 && ub != 9 || ub >= 127;
+    }
+
+    @SuppressWarnings("deprecation")
+    private static void copyLowBytes(final String s, final int len, final byte[] dst, final int dstOffs) {
+        s.getBytes(0, len, dst, dstOffs);
+    }
+
+    /**
+     * Replaces every byte in [from, to) that is non-printable as a signed byte (see
+     * {@link #isNonPrintableUsAscii(int)}) with a space, skipping printable runs eight bytes at a time.
+     */
+    private static void replaceNonPrintable(final byte[] array, int from, final int to) {
+        while ((from = Swar.indexOfNonVisible(array, from, to)) < to) {
+            if (isNonPrintableUsAscii(array[from])) {
+                array[from] = Constants.SP;
+            }
+            from++;
+        }
     }
 
     private static void fastAsciiEncode(final String s, byte[] tempBuffer, final Buffer dstBuffer) {

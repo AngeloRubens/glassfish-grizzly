@@ -119,8 +119,10 @@ public class HttpRequestDecodeBenchmark {
         bh.consume(req.getContentType());
         bh.consume(req.getHeader("x-forwarded-for")); // miss: scans all headers
 
-        // start the next op with a fresh request, as after a completed keep-alive exchange
+        // start the next op with a fresh request, as after a completed keep-alive exchange; recycling returns the
+        // request to the ThreadCache like org.glassfish.grizzly.http.server.Request#recycle does
         connection.getAttributes().removeAttribute(HttpServerFilter.HTTP_SERVER_REQUEST_ATTR_NAME);
+        req.recycle();
         return content;
     }
 }
