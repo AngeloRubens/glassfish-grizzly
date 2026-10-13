@@ -281,7 +281,7 @@ jobs:
     - name: Load test head with the agent
       run: |
         AGENT=$(ls tpa/agent/target/type-pollution-agent-*.jar | grep -v sources | head -1)
-        java -javaagent:$AGENT=org.glassfish.grizzly -Xmx512m -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > tpa.log 2>&1 &
+        java -javaagent:$AGENT=org.glassfish.grizzly -Dagent.net.bytebuddy.experimental=true -Xmx512m -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > tpa.log 2>&1 &
         pid=$!
         for i in $(seq 1 100); do grep -q READY tpa.log && break; sleep 0.2; done
         wrk -t2 -c64 -d20s http://127.0.0.1:8080/plaintext > /dev/null
