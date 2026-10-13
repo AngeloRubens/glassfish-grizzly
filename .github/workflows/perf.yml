@@ -46,7 +46,7 @@ env:
     -Denforcer.skip
 
 concurrency:
-  group: perf-${{ github.ref }}-${{ inputs.head_ref }}
+  group: perf-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'push' }}
   cancel-in-progress: true
 
 jobs:
