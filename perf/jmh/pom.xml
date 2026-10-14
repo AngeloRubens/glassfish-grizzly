@@ -47,6 +47,12 @@
             <version>${grizzly.version}</version>
         </dependency>
         <dependency>
+            <!-- 'provided' in grizzly-http2, needed at runtime by Http2AddOn -->
+            <groupId>org.glassfish.grizzly</groupId>
+            <artifactId>grizzly-npn-api</artifactId>
+            <version>2.0.1</version>
+        </dependency>
+        <dependency>
             <groupId>org.openjdk.jmh</groupId>
             <artifactId>jmh-core</artifactId>
             <version>${jmh.version}</version>

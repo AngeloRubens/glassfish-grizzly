@@ -198,9 +198,10 @@ jobs:
         }
         run_h2() { # variant scenario: HTTP/2 cleartext (prior knowledge) with h2load, 32 connections x 16 streams
           local v=$1 s=$2
-          taskset -c 0,1 java $JVM -Dperf.h2=true -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > server-$v.log 2>&1 &
+          taskset -c 0,1 java $JVM -Dperf.h2=true -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > server-h2-$v.log 2>&1 &
           local pid=$!
-          for i in $(seq 1 50); do grep -q READY server-$v.log && break; sleep 0.2; done
+          for i in $(seq 1 50); do grep -q READY server-h2-$v.log && break; sleep 0.2; done
+          if ! kill -0 $pid 2>/dev/null; then echo "HTTP/2 server did not start:"; tail -20 server-h2-$v.log; return 0; fi
           taskset -c 2,3 h2load -t2 -c32 -m16 -D10 http://127.0.0.1:8080/plaintext > /dev/null
           read u0 s0 < <(cpu $pid); read v0 n0 < <(csw $pid)
           taskset -c 2,3 h2load -t2 -c32 -m16 -D20 http://127.0.0.1:8080/plaintext > h2load-$v-$s.txt
