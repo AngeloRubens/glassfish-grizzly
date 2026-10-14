@@ -90,6 +90,8 @@ jobs:
         mvn -B -ntp -q clean package -Dgrizzly.version=$GV -f harness/perf/jmh/pom.xml
         cp harness/perf/jmh/target/benchmarks.jar jars/head.jar
         cp -r harness/perf/scripts jars/
+        mvn -B -ntp -q package -f harness/perf/netty/pom.xml
+        cp harness/perf/netty/target/netty-reference.jar jars/
     - uses: actions/upload-artifact@v4
       with:
         name: jars
@@ -429,4 +431,129 @@ jobs:
         name: executor-modes
         path: |
           modes.txt
+          srv-*.log
+
+  native-baseline:
+    name: Native transport headroom (Grizzly vs Netty nio/epoll/io_uring)
+    runs-on: ubuntu-latest
+    needs: build
+    continue-on-error: true
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: jars
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 21
+    - name: Tools
+      run: |
+        sudo apt-get install -y -qq wrk strace > /dev/null
+        sudo sysctl -w kernel.perf_event_paranoid=1 kernel.kptr_restrict=0
+        echo "io_uring_disabled=$(cat /proc/sys/kernel/io_uring_disabled 2>/dev/null || echo n/a) kernel=$(uname -r)" | tee -a $GITHUB_STEP_SUMMARY
+        curl -sSfL https://github.com/async-profiler/async-profiler/releases/download/v$ASYNC_PROFILER_VERSION/async-profiler-$ASYNC_PROFILER_VERSION-linux-x64.tar.gz | tar xz
+        mv async-profiler-$ASYNC_PROFILER_VERSION-linux-x64 ap
+        cat > pipeline.lua <<'LUA'
+        init = function(args)
+          local depth = tonumber(args[1]) or 16
+          local r = {}
+          for i = 1, depth do r[i] = wrk.format(nil, wrk.path) end
+          req = table.concat(r)
+        end
+        request = function() return req end
+        LUA
+    - name: Measure
+      run: |
+        TCK=$(getconf CLK_TCK)
+        JVM="-Xms512m -Xmx512m -XX:+UseParallelGC"
+        cpu() { awk '{print $14, $15}' /proc/$1/stat; }
+        start() { # name -> starts server, sets PID
+          case $1 in
+            grizzly-worker) taskset -c 0,1 java $JVM -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > srv-$1.log 2>&1 & ;;
+            grizzly-same)   taskset -c 0,1 java $JVM -Dperf.executor=same -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > srv-$1.log 2>&1 & ;;
+            netty-nio)      taskset -c 0,1 java $JVM -jar netty-reference.jar nio 8080 2 > srv-$1.log 2>&1 & ;;
+            netty-epoll)    taskset -c 0,1 java $JVM -jar netty-reference.jar epoll 8080 2 > srv-$1.log 2>&1 & ;;
+            netty-io_uring) taskset -c 0,1 java $JVM -jar netty-reference.jar io_uring 8080 2 > srv-$1.log 2>&1 & ;;
+          esac
+          PID=$!
+          for i in $(seq 1 75); do grep -q READY srv-$1.log && break; sleep 0.2; done
+          kill -0 $PID 2>/dev/null || { echo "$1 did not start"; tail -20 srv-$1.log; return 1; }
+        }
+        servers="grizzly-worker grizzly-same netty-nio netty-epoll netty-io_uring"
+        for round in 1 2 3; do
+          for srv in $servers; do
+            for sc in plaintext pipelined16; do
+              args="http://127.0.0.1:8080/plaintext"; [ $sc = pipelined16 ] && args="-s pipeline.lua http://127.0.0.1:8080/plaintext -- 16"
+              start $srv || continue
+              taskset -c 2,3 wrk -t2 -c64 -d10s $args > /dev/null
+              read u0 s0 < <(cpu $PID)
+              taskset -c 2,3 wrk -t2 -c64 -d20s $args > wrk.txt
+              read u1 s1 < <(cpu $PID)
+              echo "$srv $sc $(grep Requests/sec wrk.txt | awk '{print $2}') $(awk '/requests in/ {print $1}' wrk.txt) $((u1-u0)) $((s1-s0)) $TCK" >> native.txt
+              if [ $round = 1 ]; then
+                # syscall mix per request (strace slows the server down: counts only, not timing)
+                sudo strace -f -c -q -o strace-$srv-$sc.txt -p $PID &
+                st=$!; sleep 1
+                taskset -c 2,3 wrk -t2 -c64 -d8s $args > wrk-strace-$srv-$sc.txt
+                sudo kill -INT $st 2>/dev/null; wait $st 2>/dev/null || true; sleep 1
+                # CPU profile with kernel stacks
+                taskset -c 2,3 wrk -t2 -c64 -d25s $args > /dev/null &
+                w=$!; sleep 3
+                ap/bin/asprof -d 15 -e cpu -i 997us -o collapsed -f $PWD/cpu-$srv-$sc.collapsed $PID || true
+                wait $w || true
+              fi
+              kill $PID; wait $PID 2>/dev/null || true
+            done
+          done
+        done
+        python3 - <<'PY' >> $GITHUB_STEP_SUMMARY
+        import collections, statistics
+        d = collections.defaultdict(list)
+        for line in open("native.txt"):
+            srv, sc, rps, reqs, ut, st, tck = line.split()
+            reqs, tck = int(reqs), int(tck)
+            d[(sc, srv)].append((float(rps), int(ut) / tck / reqs * 1e6, int(st) / tck / reqs * 1e6))
+        print("## Grizzly vs Netty transports (median of 3 rounds; server on 2 CPUs, wrk on 2)\n")
+        print("| scenario | server | req/s | user µs/req | sys µs/req |\n|---|---|---:|---:|---:|")
+        for sc in ("plaintext", "pipelined16"):
+            for srv in ("grizzly-worker", "grizzly-same", "netty-nio", "netty-epoll", "netty-io_uring"):
+                if (sc, srv) in d:
+                    v = [statistics.median(x) for x in zip(*d[(sc, srv)])]
+                    print(f"| {sc} | {srv} | {v[0]:,.0f} | {v[1]:.2f} | {v[2]:.2f} |")
+        PY
+        for f in cpu-*-plaintext.collapsed; do
+          { echo; echo "### ${f%.collapsed}"; python3 scripts/kernel_breakdown.py $f; } >> $GITHUB_STEP_SUMMARY
+        done
+        python3 - <<'PY' >> $GITHUB_STEP_SUMMARY
+        import glob, re
+        rows = {}
+        for f in sorted(glob.glob("strace-*.txt")):
+            name = f[len("strace-"):-len(".txt")]
+            reqs = 0
+            for line in open(f"wrk-strace-{name}.txt"):
+                if "requests in" in line:
+                    reqs = int(line.split()[0])
+            calls = {}
+            for line in open(f):
+                p = line.split()
+                if len(p) >= 5 and re.match(r"^[0-9.]+$", p[0]) and p[-1] != "total":
+                    calls[p[-1]] = int(p[3])
+            if reqs:
+                rows[name] = (reqs, {k: v / reqs for k, v in calls.items()})
+        keys = sorted({k for _, c in rows.values() for k, v in c.items() if v >= 0.01}, key=lambda k: -max(c.get(k, 0) for _, c in rows.values()))[:10]
+        print("\n## Syscalls per request (strace -c, wrk run inside the trace window)\n")
+        print("| server / scenario | total | " + " | ".join(keys) + " |")
+        print("|---|---:|" + "---:|" * len(keys))
+        for name, (reqs, c) in rows.items():
+            print(f"| {name} | {sum(c.values()):.2f} | " + " | ".join(f"{c.get(k, 0):.2f}" for k in keys) + " |")
+        PY
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: native-baseline
+        path: |
+          native.txt
+          strace-*.txt
+          wrk-strace-*.txt
+          cpu-*.collapsed
           srv-*.log
