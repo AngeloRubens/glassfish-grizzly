@@ -600,10 +600,20 @@ jobs:
         mv async-profiler-$ASYNC_PROFILER_VERSION-linux-x64 ap
         keytool -genkeypair -alias perf -keyalg EC -groupname secp256r1 -dname CN=localhost -validity 3 \
             -storetype PKCS12 -keystore perf.p12 -storepass changeit -keypass changeit
+    - name: Debug Grizzly with the OpenSSL engine (one request, FINEST SSL logging)
+      run: |
+        printf 'handlers=java.util.logging.ConsoleHandler\njava.util.logging.ConsoleHandler.level=ALL\norg.glassfish.grizzly.ssl.level=FINEST\n' > ssl-logging.properties
+        java -Dperf.keystore=$PWD/perf.p12 -Dperf.tls=openssl -Dperf.executor=same -Djava.util.logging.config.file=ssl-logging.properties \
+            -cp head.jar org.glassfish.grizzly.perf.HelloServer 8443 > debug-openssl.log 2>&1 &
+        pid=$!
+        for i in $(seq 1 75); do grep -q READY debug-openssl.log && break; sleep 0.2; done
+        curl -sv -k --max-time 5 https://127.0.0.1:8443/plaintext 2>&1 | tail -25 || true
+        sleep 1; kill $pid; wait $pid 2>/dev/null || true
+        grep -v "^\s*at " debug-openssl.log | head -80
     - name: Measure
       run: |
         TCK=$(getconf CLK_TCK)
-        JVM="-Xms512m -Xmx512m -XX:+UseParallelGC -Dperf.keystore=$PWD/perf.p12"
+        JVM="-Xms512m -Xmx512m -XX:+UseParallelGC -Dperf.keystore=$PWD/perf.p12 -Dperf.keepAliveMax=-1"
         cpu() { awk '{print $14, $15}' /proc/$1/stat; }
         start() {
           case $1 in
@@ -622,17 +632,17 @@ jobs:
         for round in 1 2 3; do
           for srv in $servers; do
             for sc in keepalive handshake; do
-              hdr=""; [ $sc = handshake ] && hdr="-H Connection:close"
+              hdr=(); [ $sc = handshake ] && hdr=(-H "Connection: close")
               start $srv || continue
-              taskset -c 2,3 wrk -t2 -c64 -d10s $hdr $URL > /dev/null
+              taskset -c 2,3 wrk -t2 -c64 -d10s "${hdr[@]}" $URL > /dev/null
               read u0 s0 < <(cpu $PID)
-              taskset -c 2,3 wrk -t2 -c64 -d20s $hdr $URL > wrk-$srv-$sc.txt
+              taskset -c 2,3 wrk -t2 -c64 -d20s "${hdr[@]}" $URL > wrk-$srv-$sc.txt
               read u1 s1 < <(cpu $PID)
               errs=$(grep -E "Non-2xx|Socket errors" wrk-$srv-$sc.txt | tr '\n' ' ')
               echo "$srv $sc $(grep Requests/sec wrk-$srv-$sc.txt | awk '{print $2}') $(awk '/requests in/ {print $1}' wrk-$srv-$sc.txt) $((u1-u0)) $((s1-s0)) $TCK" >> tls.txt
               [ -n "$errs" ] && echo "$srv $sc: $errs" >> tls-errors.txt
               if [ $round = 1 ] && [ $sc = keepalive ]; then
-                taskset -c 2,3 wrk -t2 -c64 -d40s $hdr $URL > /dev/null &
+                taskset -c 2,3 wrk -t2 -c64 -d40s "${hdr[@]}" $URL > /dev/null &
                 w=$!; sleep 3
                 ap/bin/asprof -d 15 -e cpu -i 997us -o collapsed -f $PWD/cpu-$srv-$sc.collapsed $PID || true
                 ap/bin/asprof -d 15 -e alloc -o collapsed -f $PWD/alloc-$srv-$sc.collapsed $PID || true
