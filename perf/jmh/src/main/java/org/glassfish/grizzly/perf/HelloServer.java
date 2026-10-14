@@ -82,6 +82,11 @@ public final class HelloServer {
                 response.getOutputStream().write(body);
             }
         }, "/");
+        // -1 = unlimited requests per keep-alive connection (Netty has no such limit); default: Grizzly's own
+        final Integer keepAliveMax = Integer.getInteger("perf.keepAliveMax");
+        if (keepAliveMax != null) {
+            server.getListener("grizzly").getKeepAlive().setMaxRequestsCount(keepAliveMax);
+        }
         final String tls = System.getProperty("perf.tls"); // jdk | openssl
         if (tls != null) {
             server.getListener("grizzly").setSecure(true);

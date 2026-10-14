@@ -469,8 +469,8 @@ jobs:
         cpu() { awk '{print $14, $15}' /proc/$1/stat; }
         start() { # name -> starts server, sets PID
           case $1 in
-            grizzly-worker) taskset -c 0,1 java $JVM -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > srv-$1.log 2>&1 & ;;
-            grizzly-same)   taskset -c 0,1 java $JVM -Dperf.executor=same -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > srv-$1.log 2>&1 & ;;
+            grizzly-worker) taskset -c 0,1 java $JVM -Dperf.keepAliveMax=-1 -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > srv-$1.log 2>&1 & ;;
+            grizzly-same)   taskset -c 0,1 java $JVM -Dperf.keepAliveMax=-1 -Dperf.executor=same -cp head.jar org.glassfish.grizzly.perf.HelloServer 8080 > srv-$1.log 2>&1 & ;;
             netty-nio)      taskset -c 0,1 java $JVM -jar netty-reference.jar nio 8080 2 > srv-$1.log 2>&1 & ;;
             netty-epoll)    taskset -c 0,1 java $JVM -jar netty-reference.jar epoll 8080 2 > srv-$1.log 2>&1 & ;;
             netty-io_uring) taskset -c 0,1 java $JVM -jar netty-reference.jar io_uring 8080 2 > srv-$1.log 2>&1 & ;;
@@ -496,6 +496,11 @@ jobs:
                 st=$!; sleep 1
                 taskset -c 2,3 wrk -t2 -c64 -d8s $args > wrk-strace-$srv-$sc.txt
                 sudo kill -INT $st 2>/dev/null; wait $st 2>/dev/null || true; sleep 1
+                # how many ready connections each epoll_wait returns
+                sudo strace -f -e trace=epoll_wait,epoll_pwait -o ew-$srv-$sc.txt -p $PID &
+                st=$!; sleep 1
+                taskset -c 2,3 wrk -t2 -c64 -d4s $args > /dev/null
+                sudo kill -INT $st 2>/dev/null; wait $st 2>/dev/null || true; sleep 1
                 # CPU profile with kernel stacks
                 taskset -c 2,3 wrk -t2 -c64 -d25s $args > /dev/null &
                 w=$!; sleep 3
@@ -520,6 +525,21 @@ jobs:
                 if (sc, srv) in d:
                     v = [statistics.median(x) for x in zip(*d[(sc, srv)])]
                     print(f"| {sc} | {srv} | {v[0]:,.0f} | {v[1]:.2f} | {v[2]:.2f} |")
+        PY
+        python3 - <<'PY' >> $GITHUB_STEP_SUMMARY
+        import glob, re, statistics
+        print("\n## epoll_wait: ready connections returned per call\n")
+        print("| server / scenario | calls | mean ready | returned 0 | timeout ms (most common) |\n|---|---:|---:|---:|---|")
+        for f in sorted(glob.glob("ew-*.txt")):
+            vals, tmo = [], {}
+            for line in open(f):
+                m = re.search(r"epoll_p?wait\(\d+, .*?, (\d+), (-?\d+)(?:, [^)]*)?\)\s+=\s+(\d+)", line)
+                if m:
+                    vals.append(int(m.group(3)))
+                    tmo[m.group(2)] = tmo.get(m.group(2), 0) + 1
+            if vals:
+                common = max(tmo, key=tmo.get)
+                print(f"| {f[3:-4]} | {len(vals)} | {statistics.mean(vals):.2f} | {sum(1 for v in vals if v == 0) * 100 / len(vals):.0f}% | {common} |")
         PY
         for f in cpu-*-plaintext.collapsed; do
           { echo; echo "### ${f%.collapsed}"; python3 scripts/kernel_breakdown.py $f; } >> $GITHUB_STEP_SUMMARY
@@ -552,6 +572,7 @@ jobs:
       with:
         name: native-baseline
         path: |
+          ew-*.txt
           native.txt
           strace-*.txt
           wrk-strace-*.txt
