@@ -76,6 +76,7 @@ import org.glassfish.grizzly.http2.frames.PushPromiseFrame;
 import org.glassfish.grizzly.http2.frames.SettingsFrame;
 import org.glassfish.grizzly.impl.FutureImpl;
 import org.glassfish.grizzly.memory.Buffers;
+import org.glassfish.grizzly.nio.NIOConnection;
 import org.glassfish.grizzly.ssl.SSLUtils;
 
 /**
@@ -83,6 +84,14 @@ import org.glassfish.grizzly.ssl.SSLUtils;
  * @author oleksiys
  */
 public class Http2ServerFilter extends Http2BaseFilter {
+
+    /**
+     * System property to disable coalescing the frames written while a read is processed into one write (enabled by
+     * default).
+     */
+    public static final String WRITE_COALESCING_PROPERTY = Http2ServerFilter.class.getName() + ".writeCoalescing";
+
+    private static final boolean WRITE_COALESCING = Boolean.parseBoolean(System.getProperty(WRITE_COALESCING_PROPERTY, "true"));
     private final static Logger LOGGER = Grizzly.logger(Http2ServerFilter.class);
 
     private static final String[] CIPHER_SUITE_BLACK_LIST = { "TLS_NULL_WITH_NULL_NULL", "TLS_RSA_WITH_NULL_MD5", "TLS_RSA_WITH_NULL_SHA",
@@ -342,6 +351,10 @@ public class Http2ServerFilter extends Http2BaseFilter {
         }
 
         final List<Http2Frame> framesList = frameCodec.parse(http2Session, http2State.getFrameParsingState(), framePayload);
+
+        // frames written while this input is processed (responses of streams served on this thread, SETTINGS/PING
+        // acks, WINDOW_UPDATEs, ...) leave together when the read processing ends
+        corkWrites(connection);
 
         if (!processFrames(ctx, http2Session, framesList)) {
             return ctx.getSuspendAction();
@@ -752,7 +765,17 @@ public class Http2ServerFilter extends Http2BaseFilter {
 
         final FilterChainContext.TransportContext transportContext = ctx.getTransportContext();
 
+        // HEADERS and DATA frames of the response (and of other streams answered by this thread) go out in one
+        // write when the read processing of this thread ends; no-op outside read processing
+        corkWrites(ctx.getConnection());
+
         stream.getOutputSink().writeDownStream(entireHttpPacket, ctx, transportContext.getCompletionHandler(), transportContext.getMessageCloner());
+    }
+
+    private static void corkWrites(final Connection connection) {
+        if (WRITE_COALESCING && connection instanceof NIOConnection) {
+            ((NIOConnection) connection).corkWrites();
+        }
     }
 
     private void doPush(final FilterChainContext ctx, final PushEvent pushEvent) {
