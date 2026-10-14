@@ -13,12 +13,16 @@
 package org.glassfish.grizzly.perf;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Executor;
 
 import org.glassfish.grizzly.http.server.HttpHandler;
 import org.glassfish.grizzly.http.server.HttpServer;
 import org.glassfish.grizzly.http.server.Request;
+import org.glassfish.grizzly.http.server.RequestExecutorProvider;
 import org.glassfish.grizzly.http.server.Response;
 import org.glassfish.grizzly.http2.Http2AddOn;
+import org.glassfish.grizzly.threadpool.Threads;
+import org.glassfish.grizzly.threadpool.VirtualThreadExecutorService;
 
 /**
  * Minimal plaintext/JSON server used as the load-test target in CI (TechEmpower-style endpoints).
@@ -44,7 +48,23 @@ public final class HelloServer {
     public static void main(final String[] args) throws Exception {
         final int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
         final HttpServer server = HttpServer.createSimpleServer(null, "0.0.0.0", port);
+        // where service() runs: "worker" (default: selector hands off to the worker pool), "same" (on the selector
+        // thread, no hand-off) or "virtual" (a new virtual thread per request)
+        final String executor = System.getProperty("perf.executor", "worker");
+        final RequestExecutorProvider provider = switch (executor) {
+            case "same" -> new RequestExecutorProvider.SameThreadProvider();
+            case "virtual" -> {
+                final Executor virtual = VirtualThreadExecutorService.createInstance();
+                yield request -> Threads.isService() ? virtual : null;
+            }
+            default -> new RequestExecutorProvider.WorkerThreadProvider();
+        };
         server.getServerConfiguration().addHttpHandler(new HttpHandler() {
+            @Override
+            public RequestExecutorProvider getRequestExecutorProvider() {
+                return provider;
+            }
+
             @Override
             public void service(final Request request, final Response response) throws Exception {
                 if (request.getRequestURI().startsWith("/text")) {
@@ -67,7 +87,7 @@ public final class HelloServer {
             server.getListener("grizzly").registerAddOn(new Http2AddOn());
         }
         server.start();
-        System.out.println("READY " + port);
+        System.out.println("READY " + port + " executor=" + executor);
         Thread.currentThread().join();
     }
 }
