@@ -352,8 +352,10 @@ public class Http2ServerFilter extends Http2BaseFilter {
 
         final List<Http2Frame> framesList = frameCodec.parse(http2Session, http2State.getFrameParsingState(), framePayload);
 
-        // frames written while this input is processed (responses of streams served on this thread, SETTINGS/PING
-        // acks, WINDOW_UPDATEs, ...) leave together when the read processing ends
+        // Frames written while this input is processed (SETTINGS/PING acks, WINDOW_UPDATEs and the responses of the
+        // streams served on this thread) leave together when the read processing ends. Responses written later by
+        // worker threads are not corked: uncorking from a worker schedules a queue drain on the selector, which per
+        // response costs more than the write it saves.
         corkWrites(connection);
 
         if (!processFrames(ctx, http2Session, framesList)) {
@@ -764,10 +766,6 @@ public class Http2ServerFilter extends Http2BaseFilter {
         }
 
         final FilterChainContext.TransportContext transportContext = ctx.getTransportContext();
-
-        // HEADERS and DATA frames of the response (and of other streams answered by this thread) go out in one
-        // write when the read processing of this thread ends; no-op outside read processing
-        corkWrites(ctx.getConnection());
 
         stream.getOutputSink().writeDownStream(entireHttpPacket, ctx, transportContext.getCompletionHandler(), transportContext.getMessageCloner());
     }
