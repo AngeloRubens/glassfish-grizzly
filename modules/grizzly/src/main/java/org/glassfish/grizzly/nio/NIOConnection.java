@@ -898,10 +898,12 @@ public abstract class NIOConnection implements Connection<SocketAddress> {
         if (writesCorked) {
             writesCorked = false;
             // a corked writer enqueues and then re-checks the flag: either it sees false here, or we see its record
-            if (!asyncWriteQueue.isEmpty() && isOpen()) {
-                // Same WRITE event a simulateIOEvent() would schedule, but run right away when this is the
-                // connection's selector thread (which runs that event anyway), instead of after another select()
-                transport.getSelectorHandler().execute(selectorRunner, writeSimulatorRunnable, null);
+            if (!asyncWriteQueue.isEmpty()) {
+                try {
+                    simulateIOEvent(IOEvent.WRITE);
+                } catch (IOException e) {
+                    LOGGER.log(Level.FINE, "Could not flush the corked writes", e);
+                }
             }
         }
     }
