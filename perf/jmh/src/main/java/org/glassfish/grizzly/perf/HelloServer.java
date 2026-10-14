@@ -82,12 +82,18 @@ public final class HelloServer {
                 response.getOutputStream().write(body);
             }
         }, "/");
+        final String tls = System.getProperty("perf.tls"); // jdk | openssl
+        if (tls != null) {
+            server.getListener("grizzly").setSecure(true);
+            server.getListener("grizzly").setSSLEngineConfig(TlsSupport.engineConfigurator(tls,
+                    System.getProperty("perf.keystore", "perf.p12"), System.getProperty("perf.keystore.pass", "changeit")));
+        }
         if (Boolean.getBoolean("perf.h2")) {
             // HTTP/2 over cleartext (prior knowledge or upgrade) next to HTTP/1.1
             server.getListener("grizzly").registerAddOn(new Http2AddOn());
         }
         server.start();
-        System.out.println("READY " + port + " executor=" + executor);
+        System.out.println("READY " + port + " executor=" + executor + " tls=" + tls);
         Thread.currentThread().join();
     }
 }

@@ -557,3 +557,96 @@ jobs:
           wrk-strace-*.txt
           cpu-*.collapsed
           srv-*.log
+
+  tls:
+    name: TLS (JDK SSLEngine vs OpenSSL; Grizzly vs Netty)
+    runs-on: ubuntu-latest
+    needs: build
+    continue-on-error: true
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: jars
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 21
+    - name: Tools and certificate
+      run: |
+        sudo apt-get install -y -qq wrk > /dev/null
+        sudo sysctl -w kernel.perf_event_paranoid=1 kernel.kptr_restrict=0
+        curl -sSfL https://github.com/async-profiler/async-profiler/releases/download/v$ASYNC_PROFILER_VERSION/async-profiler-$ASYNC_PROFILER_VERSION-linux-x64.tar.gz | tar xz
+        mv async-profiler-$ASYNC_PROFILER_VERSION-linux-x64 ap
+        keytool -genkeypair -alias perf -keyalg EC -groupname secp256r1 -dname CN=localhost -validity 3 \
+            -storetype PKCS12 -keystore perf.p12 -storepass changeit -keypass changeit
+    - name: Measure
+      run: |
+        TCK=$(getconf CLK_TCK)
+        JVM="-Xms512m -Xmx512m -XX:+UseParallelGC -Dperf.keystore=$PWD/perf.p12"
+        cpu() { awk '{print $14, $15}' /proc/$1/stat; }
+        start() {
+          case $1 in
+            grizzly-jdk-worker)  taskset -c 0,1 java $JVM -Dperf.tls=jdk -cp head.jar org.glassfish.grizzly.perf.HelloServer 8443 > srv-$1.log 2>&1 & ;;
+            grizzly-jdk-same)    taskset -c 0,1 java $JVM -Dperf.tls=jdk -Dperf.executor=same -cp head.jar org.glassfish.grizzly.perf.HelloServer 8443 > srv-$1.log 2>&1 & ;;
+            grizzly-openssl-same) taskset -c 0,1 java $JVM -Dperf.tls=openssl -Dperf.executor=same -cp head.jar org.glassfish.grizzly.perf.HelloServer 8443 > srv-$1.log 2>&1 & ;;
+            netty-jdk)           taskset -c 0,1 java $JVM -jar netty-reference.jar nio 8443 2 jdk > srv-$1.log 2>&1 & ;;
+            netty-openssl)       taskset -c 0,1 java $JVM -jar netty-reference.jar nio 8443 2 openssl > srv-$1.log 2>&1 & ;;
+          esac
+          PID=$!
+          for i in $(seq 1 75); do grep -q READY srv-$1.log && break; sleep 0.2; done
+          kill -0 $PID 2>/dev/null || { echo "$1 did not start"; tail -30 srv-$1.log; return 1; }
+        }
+        URL=https://127.0.0.1:8443/plaintext
+        servers="grizzly-jdk-worker grizzly-jdk-same grizzly-openssl-same netty-jdk netty-openssl"
+        for round in 1 2 3; do
+          for srv in $servers; do
+            for sc in keepalive handshake; do
+              hdr=""; [ $sc = handshake ] && hdr="-H Connection:close"
+              start $srv || continue
+              taskset -c 2,3 wrk -t2 -c64 -d10s $hdr $URL > /dev/null
+              read u0 s0 < <(cpu $PID)
+              taskset -c 2,3 wrk -t2 -c64 -d20s $hdr $URL > wrk-$srv-$sc.txt
+              read u1 s1 < <(cpu $PID)
+              errs=$(grep -E "Non-2xx|Socket errors" wrk-$srv-$sc.txt | tr '\n' ' ')
+              echo "$srv $sc $(grep Requests/sec wrk-$srv-$sc.txt | awk '{print $2}') $(awk '/requests in/ {print $1}' wrk-$srv-$sc.txt) $((u1-u0)) $((s1-s0)) $TCK" >> tls.txt
+              [ -n "$errs" ] && echo "$srv $sc: $errs" >> tls-errors.txt
+              if [ $round = 1 ] && [ $sc = keepalive ]; then
+                taskset -c 2,3 wrk -t2 -c64 -d40s $hdr $URL > /dev/null &
+                w=$!; sleep 3
+                ap/bin/asprof -d 15 -e cpu -i 997us -o collapsed -f $PWD/cpu-$srv-$sc.collapsed $PID || true
+                ap/bin/asprof -d 15 -e alloc -o collapsed -f $PWD/alloc-$srv-$sc.collapsed $PID || true
+                wait $w || true
+              fi
+              kill $PID; wait $PID 2>/dev/null || true
+            done
+          done
+        done
+        python3 - <<'PY' >> $GITHUB_STEP_SUMMARY
+        import collections, statistics
+        d = collections.defaultdict(list)
+        for line in open("tls.txt"):
+            srv, sc, rps, reqs, ut, st, tck = line.split()
+            reqs, tck = int(reqs), int(tck)
+            d[(sc, srv)].append((float(rps), int(ut) / tck / reqs * 1e6, int(st) / tck / reqs * 1e6))
+        print("## TLS 1.3 over loopback (median of 3 rounds; server on 2 CPUs, wrk on 2)\\n")
+        print("keepalive = 64 persistent connections; handshake = new connection (full TLS handshake) per request\\n")
+        print("| scenario | server | req/s | user µs/req | sys µs/req |\\n|---|---|---:|---:|---:|")
+        for sc in ("keepalive", "handshake"):
+            for srv in ("grizzly-jdk-worker", "grizzly-jdk-same", "grizzly-openssl-same", "netty-jdk", "netty-openssl"):
+                if (sc, srv) in d:
+                    v = [statistics.median(x) for x in zip(*d[(sc, srv)])]
+                    print(f"| {sc} | {srv} | {v[0]:,.0f} | {v[1]:.2f} | {v[2]:.2f} |")
+        PY
+        [ -f tls-errors.txt ] && { echo; echo '### wrk errors'; echo '```'; cat tls-errors.txt; echo '```'; } >> $GITHUB_STEP_SUMMARY || true
+        for f in cpu-*.collapsed; do { echo; echo "### ${f%.collapsed}"; python3 scripts/top_frames.py $f 15; } >> $GITHUB_STEP_SUMMARY; done
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: tls
+        path: |
+          tls.txt
+          tls-errors.txt
+          wrk-*.txt
+          cpu-*.collapsed
+          alloc-*.collapsed
+          srv-*.log

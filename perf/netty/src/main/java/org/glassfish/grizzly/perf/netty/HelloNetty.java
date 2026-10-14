@@ -12,7 +12,12 @@
 
 package org.glassfish.grizzly.perf.netty;
 
+import java.io.FileInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
+
+import javax.net.ssl.KeyManagerFactory;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -43,6 +48,9 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
 import io.netty.util.AsciiString;
 
 /**
@@ -61,6 +69,8 @@ public final class HelloNetty {
         final String transport = args.length > 0 ? args[0] : "nio";
         final int port = args.length > 1 ? Integer.parseInt(args[1]) : 8080;
         final int threads = args.length > 2 ? Integer.parseInt(args[2]) : 2;
+        final String tls = args.length > 3 ? args[3] : null; // jdk | openssl
+        final SslContext sslContext = tls == null ? null : sslContext(tls);
 
         final IoHandlerFactory ioHandler;
         final Class<? extends ServerChannel> channelClass;
@@ -91,15 +101,29 @@ public final class HelloNetty {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(final SocketChannel ch) {
+                            if (sslContext != null) {
+                                ch.pipeline().addLast(sslContext.newHandler(ch.alloc()));
+                            }
                             ch.pipeline().addLast(new HttpServerCodec(), new HelloHandler());
                         }
                     })
                     .bind(port).sync();
-            System.out.println("READY " + port + " transport=" + transport + " threads=" + threads);
+            System.out.println("READY " + port + " transport=" + transport + " threads=" + threads + " tls=" + tls);
             Thread.currentThread().join();
         } finally {
             group.shutdownGracefully();
         }
+    }
+
+    private static SslContext sslContext(final String provider) throws Exception {
+        final char[] password = System.getProperty("perf.keystore.pass", "changeit").toCharArray();
+        final KeyStore ks = KeyStore.getInstance("PKCS12");
+        try (InputStream in = new FileInputStream(System.getProperty("perf.keystore", "perf.p12"))) {
+            ks.load(in, password);
+        }
+        final KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        kmf.init(ks, password);
+        return SslContextBuilder.forServer(kmf).sslProvider("openssl".equals(provider) ? SslProvider.OPENSSL : SslProvider.JDK).build();
     }
 
     private static final class HelloHandler extends SimpleChannelInboundHandler<Object> {
