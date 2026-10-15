@@ -358,8 +358,8 @@ public final class Parameters {
     private final BufferChunk origName = new BufferChunk();
     private final BufferChunk origValue = new BufferChunk();
     // buffers are allocated on first use (CharChunk.makeSpace): most requests never decode parameters
-    final CharChunk tmpNameC = new CharChunk();
-    final CharChunk tmpValueC = new CharChunk();
+    final CharChunk tmpNameC = new CharChunk(1024);
+    final CharChunk tmpValueC = new CharChunk(1024);
 
     public static final String DEFAULT_ENCODING = Constants.DEFAULT_HTTP_CHARACTER_ENCODING;
     public static final Charset DEFAULT_CHARSET = Constants.DEFAULT_HTTP_CHARSET;

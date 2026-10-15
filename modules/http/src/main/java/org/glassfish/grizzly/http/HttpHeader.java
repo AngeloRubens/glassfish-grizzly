@@ -56,7 +56,7 @@ public abstract class HttpHeader extends HttpPacket implements MimeHeadersPacket
 
     protected boolean isChunked;
     private final byte[] tmpContentLengthBuffer = new byte[20];
-    private byte[] tmpHeaderEncodingBuffer; // lazily allocated: only needed to encode into non-array Buffers
+    private byte[] tmpHeaderEncodingBuffer = new byte[512];
 
     protected long contentLength = -1;
 
