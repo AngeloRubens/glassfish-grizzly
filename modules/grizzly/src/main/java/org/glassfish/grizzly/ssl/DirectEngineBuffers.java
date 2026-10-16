@@ -119,7 +119,7 @@ final class DirectEngineBuffers {
         final SSLEngineResult result = sslEngineWrap(engine, in, out);
 
         if (gather) {
-            int consumed = in.position();
+            int consumed = in.limit();
             for (int i = 0; i < srcsLength && consumed > 0; i++) {
                 final ByteBuffer src = srcs[i];
                 final int n = Math.min(src.remaining(), consumed);
