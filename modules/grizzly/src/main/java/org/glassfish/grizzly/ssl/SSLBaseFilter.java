@@ -407,7 +407,6 @@ public class SSLBaseFilter extends BaseFilter {
                 }
 
                 // application data decrypted during the re-handshake follows the records unwrapped before it
-                output = appendHandshakeAppData(output, sslCtx.takeHandshakeAppData(), ctx);
 
                 if (input == null) {
                     break;
