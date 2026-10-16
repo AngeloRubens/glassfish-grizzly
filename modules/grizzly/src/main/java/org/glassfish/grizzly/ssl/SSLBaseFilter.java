@@ -707,7 +707,7 @@ public class SSLBaseFilter extends BaseFilter {
         notifyHandshakeStart(c);
 
         try {
-            final Buffer buffer = doHandshakeSync(sslCtx, context, input, handshakeTimeoutMillis);
+            final Buffer buffer = doHandshakeSync(sslCtx, context, null, handshakeTimeoutMillis);
 
             notifyHandshakeComplete(c, sslCtx.getSslEngine());
 
