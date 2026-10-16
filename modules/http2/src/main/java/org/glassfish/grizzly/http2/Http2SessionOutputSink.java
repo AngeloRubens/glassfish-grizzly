@@ -169,7 +169,7 @@ public class Http2SessionOutputSink {
                     && writerLock.compareAndSet(false, true)) {
                 boolean written = false;
                 try {
-                    if (outputQueue.isEmpty() && availConnectionWindowSize.get() >= size && connectionCanWrite()) {
+                    if (outputQueue.isEmpty() && connectionCanWrite()) {
                         final Buffer payload = messageCloner != null ? messageCloner.clone(http2Session.getConnection(), data) : data;
                         headerFrames.add(DataFrame.builder().streamId(stream.getId()).data(payload).endStream(isLast).build());
                         availConnectionWindowSize.addAndGet(-size);
