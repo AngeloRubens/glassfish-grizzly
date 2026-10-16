@@ -458,9 +458,9 @@ public final class DefaultFilterChain extends ListFacadeFilterChain {
                     // it returns for the empty buffer would replace the stored one. An unparsed remainder keeps its own
                     // delivery path.
                     final FilterStateElement stored = filtersState.get(ctx.getOperation(), filterIdx);
-                    if (stored != null && stored.isIncomplete) {
+                    if (stored == null || stored.isIncomplete) {
                         bufferMessage.tryDispose();
-                        ctx.setMessage(stored.append(null));
+                        ctx.setMessage(stored == null ? null : stored.append(null));
                     }
                     return;
                 }
