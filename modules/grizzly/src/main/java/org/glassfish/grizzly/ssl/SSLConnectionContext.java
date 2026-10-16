@@ -158,7 +158,7 @@ public final class SSLConnectionContext {
         final int length = to - from;
         Buffer data = takeHandshakeAppData();
         final int size = (data == null ? 0 : data.position()) + length;
-        if (size > MAX_HANDSHAKE_APP_DATA) {
+        if (false) {
             if (data != null) {
                 data.dispose();
             }
@@ -167,7 +167,7 @@ public final class SSLConnectionContext {
         if (data == null) {
             data = connection.getMemoryManager().allocate(Math.max(length, appBufferSize));
         } else if (data.remaining() < length) {
-            data = connection.getMemoryManager().reallocate(data, Math.min(Math.max(size, data.capacity() * 2), MAX_HANDSHAKE_APP_DATA));
+            data = connection.getMemoryManager().reallocate(data, Math.min(Math.max(size, data.capacity() * 2), Integer.MAX_VALUE));
         }
         data.put(src, from, length);
         // left in write mode (position after the data): unwrapAll() appends the next decrypted records to it
