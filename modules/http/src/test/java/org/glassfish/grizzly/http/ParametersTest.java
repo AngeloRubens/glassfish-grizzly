@@ -41,6 +41,15 @@ import org.junit.Test;
 
 public class ParametersTest {
 
+    @Test
+    public void testDecodeBufferWithoutEncoding() {
+        final Parameters parameters = new Parameters();
+        final String query = "a=b%20c&d%21=e";
+        parameters.processParameters(Buffers.wrap(MemoryManager.DEFAULT_MEMORY_MANAGER, query), 0, query.length(), null);
+        assertEquals("b c", parameters.getParameter("a"));
+        assertEquals("e", parameters.getParameter("d!"));
+    }
+
     private static final Parameter SIMPLE = new Parameter("foo1", "bar1");
     private static final Parameter SIMPLE_MULTIPLE = new Parameter("foo2", "bar1", "bar2");
     private static final Parameter NO_VALUE = new Parameter("foo3");
