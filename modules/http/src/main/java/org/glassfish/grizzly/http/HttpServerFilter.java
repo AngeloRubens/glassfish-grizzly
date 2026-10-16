@@ -71,7 +71,7 @@ public class HttpServerFilter extends HttpCodecFilter {
     public static final String PIPELINED_WRITE_COALESCING_PROPERTY = HttpServerFilter.class.getName() + ".pipelinedWriteCoalescing";
 
     private static final boolean PIPELINED_WRITE_COALESCING =
-            Boolean.parseBoolean(System.getProperty(PIPELINED_WRITE_COALESCING_PROPERTY, "true"))
+            Boolean.parseBoolean(System.getProperty(PIPELINED_WRITE_COALESCING_PROPERTY, "false"))
             && !OutputBuffer.isBlockingWrites();
 
     public static final FilterChainEvent RESPONSE_COMPLETE_EVENT = new HttpEvents.ResponseCompleteEvent();
