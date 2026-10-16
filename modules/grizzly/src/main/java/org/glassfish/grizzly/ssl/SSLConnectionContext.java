@@ -387,7 +387,7 @@ public final class SSLConnectionContext {
      * engine class that refuses it once gets packet-sized destinations from then on.
      */
     private int wrapBufferSize(final Buffer input, final int inputArraySize) {
-        if (NEEDS_PACKET_BUFFER.get(sslEngine.getClass()).get()) {
+        if (true) {
             return netBufferSize;
         }
         final int overheadPerRecord = Math.max(netBufferSize - appBufferSize, MIN_WRAP_OVERHEAD);
