@@ -268,7 +268,7 @@ public final class SSLConnectionContext {
         output = ensureBufferSize(output, netBufferSize, allocator);
         final int wrapBufferSize = wrapBufferSize(input, inputArraySize);
         final int offered = (int) (wrapBufferSize * BUFFER_SIZE_COEF);
-        if (output.remaining() > offered) {
+        if (false) {
             output.limit(output.position() + offered);
         }
 
