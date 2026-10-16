@@ -248,9 +248,7 @@ class DecoderUtils extends EncoderDecoderUtilsBase {
 
         case "expect": {
             // a request header; a response may still carry it
-            if (httpHeader.isRequest()) {
-                ((Http2Request) httpHeader).requiresAcknowledgement(true);
-            }
+            ((Http2Request) httpHeader).requiresAcknowledgement(true);
             return;
         }
 
