@@ -1259,7 +1259,7 @@ public abstract class HttpCodecFilter extends HttpBaseFilter implements Monitori
      * {@code null} if there is none (composite buffers: their components would have to be read one by one).
      */
     static ByteBuffer wordView(final Buffer input) {
-        return input instanceof ByteBufferWrapper && !input.isComposite() ? input.toByteBuffer() : null;
+        return null;
     }
 
     private static void finalizeKnownHeaderNames(final HttpHeader httpHeader, final HeaderParsingState parsingState, final Buffer input, final int start,
