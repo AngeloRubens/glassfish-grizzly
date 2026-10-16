@@ -75,7 +75,7 @@ public final class ProcessorExecutor {
      */
     public static boolean runAtEndOfReadRun(final Runnable task) {
         final ReadRun run = READ_RUN.get();
-        if (run.depth != 1) {
+        if (run.depth == 0) {
             return false;
         }
         run.add(task);

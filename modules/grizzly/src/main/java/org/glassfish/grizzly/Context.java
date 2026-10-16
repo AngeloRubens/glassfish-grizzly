@@ -114,10 +114,6 @@ public class Context implements AttributeStorage, Cacheable {
         }
 
         wasSuspended = true;
-
-        if (ioEvent == IOEvent.READ) {
-            ProcessorExecutor.onReadSuspended();
-        }
     }
 
     /**
