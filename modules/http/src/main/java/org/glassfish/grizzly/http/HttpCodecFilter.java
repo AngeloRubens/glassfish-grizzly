@@ -534,7 +534,6 @@ public abstract class HttpCodecFilter extends HttpBaseFilter implements Monitori
                     // filterchain processing. The input is kept from its position on and the next read is appended to
                     // it: at position 0, index 0 of the combined buffer stays index 0 of this one (also when the next
                     // read is appended in place to a composite), so the parsing indexes stay valid.
-                    input.position(0);
                     return ctx.getStopAction(input);
                 } else {
                     final int headerSizeInBytes = input.position() - parsingState.getHeaderParsingState().messageStart;
