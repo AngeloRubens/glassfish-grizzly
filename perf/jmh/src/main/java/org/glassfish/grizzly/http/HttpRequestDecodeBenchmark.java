@@ -13,10 +13,12 @@
 package org.glassfish.grizzly.http;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
+import org.glassfish.grizzly.Buffer;
 import org.glassfish.grizzly.filterchain.FilterChainContext;
 import org.glassfish.grizzly.http.util.Header;
 import org.glassfish.grizzly.memory.Buffers;
@@ -84,6 +86,15 @@ public class HttpRequestDecodeBenchmark {
     @Param({ "minimal", "browser", "api_post" })
     public String request;
 
+    /**
+     * heap: array-backed buffer (the byte[] parsing path); direct: a direct ByteBuffer; composite: two heap buffers
+     * split in the middle of the header block, as when a request arrives in two reads (both take the Buffer path).
+     */
+    @Param({ "heap", "direct", "composite" })
+    public String input;
+
+    private ByteBuffer direct;
+
     private byte[] template;
     private HttpServerFilter filter;
     private StandaloneConnection connection;
@@ -101,14 +112,31 @@ public class HttpRequestDecodeBenchmark {
         filter = new HttpServerFilter(true, 8192, null, null);
         connection = new StandaloneConnection();
         mm = MemoryManager.DEFAULT_MEMORY_MANAGER;
+        direct = ByteBuffer.allocateDirect(template.length);
+    }
+
+    private Buffer inputBuffer() {
+        switch (input) {
+        case "direct": {
+            direct.clear();
+            direct.put(template).flip();
+            return Buffers.wrap(mm, direct);
+        }
+        case "composite": {
+            final int half = template.length / 2;
+            return Buffers.appendBuffers(mm, Buffers.wrap(mm, Arrays.copyOfRange(template, 0, half)),
+                    Buffers.wrap(mm, Arrays.copyOfRange(template, half, template.length)));
+        }
+        default:
+            // the parser lower-cases header names in place, so every op works on a fresh copy
+            return Buffers.wrap(mm, Arrays.copyOf(template, template.length));
+        }
     }
 
     @Benchmark
     public Object decode(final Blackhole bh) throws IOException {
-        // the parser lower-cases header names in place, so every op works on a fresh copy
-        final byte[] bytes = Arrays.copyOf(template, template.length);
         final FilterChainContext ctx = FilterChainContext.create(connection);
-        ctx.setMessage(Buffers.wrap(mm, bytes));
+        ctx.setMessage(inputBuffer());
         filter.handleRead(ctx);
 
         final HttpContent content = ctx.getMessage();
