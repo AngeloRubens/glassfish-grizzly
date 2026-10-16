@@ -712,10 +712,6 @@ public class OutputBuffer {
             forceCommitHeaders(false);
         }
 
-        // an explicit flush also writes what the connection holds back to coalesce responses to pipelined requests
-        if (connection instanceof NIOConnection) {
-            ((NIOConnection) connection).flushCorkedWrites();
-        }
 
         blockAfterWriteIfNeeded();
     }
