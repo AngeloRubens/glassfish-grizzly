@@ -1229,7 +1229,7 @@ public abstract class HttpCodecFilter extends HttpBaseFilter implements Monitori
             }
         } else if (size == Header.Expect.getLowerCaseBytes().length) {
             // Expect is a request header; a response may still carry it
-            if (httpHeader.isRequest() && BufferChunk.equalsIgnoreCaseLowerCase(input, start, end, Header.Expect.getLowerCaseBytes())) {
+            if (BufferChunk.equalsIgnoreCaseLowerCase(input, start, end, Header.Expect.getLowerCaseBytes())) {
                 ((HttpRequestPacket) httpHeader).requiresAcknowledgement(true);
             }
         }
