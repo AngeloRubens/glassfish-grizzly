@@ -64,9 +64,7 @@ final class DirectEngineBuffers {
             return null;
         }
         final ByteBuffer[] area = AREA.get();
-        if (area[IN_USE] != null) {
-            return null;
-        }
+
         area[IN_USE] = IN_USE_MARK;
         return area;
     }
