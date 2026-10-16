@@ -190,7 +190,7 @@ public final class SSLConnectionContext {
         final ByteBuffer inputByteBuffer = input.toByteBuffer(input.position(), input.position() + len);
         final int initPosition = inputByteBuffer.position();
         SSLEngineResult sslEngineResult;
-        final ByteBuffer[] staging = stageInDirectBuffers && !output.isComposite() ? DirectEngineBuffers.acquire() : null;
+        final ByteBuffer[] staging = stageInDirectBuffers ? DirectEngineBuffers.acquire() : null;
 
         try {
             sslEngineResult = staging != null ? DirectEngineBuffers.unwrap(staging, sslEngine, inputByteBuffer, output.toByteBuffer()) : null;
