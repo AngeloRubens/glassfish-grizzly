@@ -181,9 +181,6 @@ public class Http2SessionOutputSink {
                 }
                 if (written) {
                     // data queued meanwhile, e.g. by the completion handler of this write, found the writer locked
-                    if (!outputQueue.isEmpty()) {
-                        flushOutputQueue();
-                    }
                     return;
                 }
             }
