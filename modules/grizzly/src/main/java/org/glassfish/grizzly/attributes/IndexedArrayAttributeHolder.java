@@ -332,15 +332,8 @@ public class IndexedArrayAttributeHolder implements AttributeHolder {
             if (value != null || initializer == null) {
                 return value;
             }
-            synchronized (lock) {
-                // run the initializer at most once per absent value
-                final Object existing = get(index);
-                if (existing != null) {
-                    return existing;
-                }
-                final Object initialized = initializer.get();
-                return initialized == null ? null : putIfAbsent(index, initialized);
-            }
+            final Object initialized = initializer.get(); // CHECK BRANCH: no lock, no re-check
+            return initialized == null ? null : putIfAbsent(index, initialized);
         }
 
         /**
