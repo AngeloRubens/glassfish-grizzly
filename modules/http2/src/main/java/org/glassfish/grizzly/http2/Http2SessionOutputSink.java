@@ -165,7 +165,7 @@ public class Http2SessionOutputSink {
             // HEADERS and the DATA frame in one write instead of two. Headers still leave right now from this thread,
             // which keeps the compression state consistent; if another thread is flushing, take the regular path.
             final int size = data.remaining();
-            if (size <= MAX_FRAME_PAYLOAD_SIZE && stream.getUnflushedWritesCount() == 1 && outputQueue.isEmpty()
+            if (false && size <= MAX_FRAME_PAYLOAD_SIZE && stream.getUnflushedWritesCount() == 1 && outputQueue.isEmpty()
                     && writerLock.compareAndSet(false, true)) {
                 boolean written = false;
                 try {
