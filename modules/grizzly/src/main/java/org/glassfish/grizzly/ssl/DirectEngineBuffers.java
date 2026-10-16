@@ -99,7 +99,7 @@ final class DirectEngineBuffers {
             for (int i = 0; i < srcsLength; i++) {
                 remaining += srcs[i].remaining();
             }
-            final int size = (int) Math.min(remaining, maxPlaintext > 0 ? Math.min(maxPlaintext, MAX_STAGED_BYTES) : MAX_STAGED_BYTES);
+            final int size = (int) Math.min(remaining, Math.min(maxPlaintext, MAX_STAGED_BYTES));
             in = buffer(area, SOURCE, size);
             if (in == null) {
                 return null;
