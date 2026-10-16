@@ -290,7 +290,7 @@ public class IndexedArrayAttributeHolder implements AttributeHolder {
             final Object[] resized = new Object[Math.max(index + 1, Math.max(MIN_CAPACITY, array.length * 2))];
             for (int i = 0; i < array.length; i++) {
                 // freeze the slot: CASes on the old array fail from now on and retry on the new one
-                resized[i] = SLOT.getAndSet(array, i, MOVED);
+                resized[i] = SLOT.getAcquire(array, i); // CHECK BRANCH: no freeze
             }
             values = resized;
             return resized;
