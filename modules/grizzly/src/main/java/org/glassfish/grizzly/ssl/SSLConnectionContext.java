@@ -316,9 +316,7 @@ public final class SSLConnectionContext {
         } catch (SSLException e) {
             return new SslResult(output, e);
         } finally {
-            if (staging != null) {
-                DirectEngineBuffers.release(staging);
-            }
+            // no release
         }
 
         final Status status = sslEngineResult.getStatus();
