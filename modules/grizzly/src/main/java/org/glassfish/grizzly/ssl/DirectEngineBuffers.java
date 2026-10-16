@@ -178,7 +178,7 @@ final class DirectEngineBuffers {
         if (out == dst) {
             return;
         }
-        final int produced = Math.min(out.limit(), Math.max(out.position(), result.bytesProduced()));
+        final int produced = out.position();
         dst.put(out.limit(produced).position(0));
     }
 
