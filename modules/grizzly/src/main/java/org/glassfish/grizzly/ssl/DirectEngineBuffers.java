@@ -99,7 +99,7 @@ final class DirectEngineBuffers {
             for (int i = 0; i < srcsLength; i++) {
                 remaining += srcs[i].remaining();
             }
-            final int size = (int) Math.min(remaining, maxPlaintext > 0 ? Math.min(maxPlaintext, MAX_STAGED_BYTES) : MAX_STAGED_BYTES);
+            final int size = (int) Math.min(remaining, maxPlaintext > 0 ? maxPlaintext : Integer.MAX_VALUE);
             in = buffer(area, SOURCE, size);
             if (in == null) {
                 return null;
@@ -144,7 +144,7 @@ final class DirectEngineBuffers {
         }
 
         final ByteBuffer in;
-        if (src.isDirect() || src.remaining() > MAX_STAGED_BYTES) {
+        if (src.isDirect()) {
             in = src;
         } else {
             in = buffer(area, SOURCE, src.remaining());
@@ -167,7 +167,7 @@ final class DirectEngineBuffers {
 
     /** {@code dst} itself if it is direct or above the bound, else a staging buffer with as many bytes remaining. */
     private static ByteBuffer destination(final ByteBuffer[] area, final ByteBuffer dst) {
-        return dst.isDirect() || dst.remaining() > MAX_STAGED_BYTES ? dst : buffer(area, DESTINATION, dst.remaining());
+        return dst.isDirect() ? dst : buffer(area, DESTINATION, dst.remaining());
     }
 
     /**
