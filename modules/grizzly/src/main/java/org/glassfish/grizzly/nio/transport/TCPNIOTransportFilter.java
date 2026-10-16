@@ -60,7 +60,6 @@ public final class TCPNIOTransportFilter extends BaseFilter {
             buffer = transport.read(connection, inBuffer);
         } else {
             // the peer may wait for writes this thread holds back before it sends what this thread waits for
-            connection.flushCorkedWrites();
             GrizzlyFuture<ReadResult<Buffer, SocketAddress>> future = transport.getTemporarySelectorIO().getReader().read(connection, inBuffer);
             try {
                 ReadResult<Buffer, SocketAddress> result = future.get();
