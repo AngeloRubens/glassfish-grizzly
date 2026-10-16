@@ -90,7 +90,7 @@ final class DirectEngineBuffers {
             return null;
         }
 
-        final boolean gather = srcsLength != 1 || !srcs[0].isDirect();
+        final boolean gather = true;
         final ByteBuffer in;
         if (!gather) {
             in = srcs[0];
