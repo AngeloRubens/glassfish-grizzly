@@ -675,7 +675,7 @@ public class MimeHeaders {
 
     private boolean isValidName(final Buffer buffer, final int start, final int len) {
         return !marked
-                || Arrays.binarySearch(INVALID_TRAILER_NAMES, buffer.toStringContent(StandardCharsets.ISO_8859_1, start, start + len).toLowerCase(Locale.ROOT)) < 0;
+                || Arrays.binarySearch(INVALID_TRAILER_NAMES, buffer.toStringContent(StandardCharsets.ISO_8859_1, start, start + len).toLowerCase()) < 0;
     }
 
 }
