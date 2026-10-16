@@ -65,7 +65,7 @@ public final class SSLConnectionContext {
      */
     static final String DIRECT_ENGINE_BUFFERS_PROPERTY = SSLConnectionContext.class.getName() + ".directEngineBuffers";
     /** Read by {@link #configure(SSLEngine)}; not final so that tests can switch it. */
-    static boolean directEngineBuffers = Boolean.parseBoolean(System.getProperty(DIRECT_ENGINE_BUFFERS_PROPERTY, "true"));
+    static boolean directEngineBuffers = Boolean.parseBoolean(System.getProperty(DIRECT_ENGINE_BUFFERS_PROPERTY, "false"));
 
     static {
         final String coef = System.getProperty(SSLConnectionContext.class.getName(), "1.5");
