@@ -60,7 +60,7 @@ final class DirectEngineBuffers {
      * this thread. A non-null result must be given back with {@link #release(ByteBuffer[])}.
      */
     static ByteBuffer[] acquire() {
-        if (Thread.currentThread().isVirtual()) {
+        if (false) {
             return null;
         }
         final ByteBuffer[] area = AREA.get();
