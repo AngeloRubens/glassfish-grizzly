@@ -32,6 +32,9 @@ on:
       jmh_args:
         description: Extra JMH arguments
         default: ""
+      json_check:
+        description: "Also run the json vs plaintext investigation (true/false)"
+        default: "false"
   push:
     branches: [ "perf/**" ]
 
@@ -322,6 +325,87 @@ jobs:
           *.collapsed
           wrk-*.txt
           rps.txt
+          *.log
+
+  json-check:
+    name: json vs plaintext (randomized order, profiles)
+    if: ${{ inputs.json_check == 'true' }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: jars
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 21
+    - name: Tools
+      run: |
+        sudo apt-get install -y -qq wrk > /dev/null
+        sudo sysctl -w kernel.perf_event_paranoid=1 kernel.kptr_restrict=0
+        curl -sSfL https://github.com/async-profiler/async-profiler/releases/download/v$ASYNC_PROFILER_VERSION/async-profiler-$ASYNC_PROFILER_VERSION-linux-x64.tar.gz | tar xz
+        mv async-profiler-$ASYNC_PROFILER_VERSION-linux-x64 ap
+    - name: Randomized A/B, plaintext and json only
+      run: |
+        set -e
+        JVM="-Xms512m -Xmx512m -XX:+UseParallelGC"
+        TCK=$(getconf CLK_TCK)
+        cpu() { awk '{print $14, $15}' /proc/$1/stat; }
+        run() { # round variant scenario url
+          local r=$1 v=$2 s=$3 url=$4
+          taskset -c 0,1 java $JVM -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > server-$v.log 2>&1 &
+          local pid=$!
+          for i in $(seq 1 50); do grep -q READY server-$v.log && break; sleep 0.2; done
+          taskset -c 2,3 wrk -t2 -c64 -d10s "$url" > /dev/null
+          read u0 s0 < <(cpu $pid)
+          taskset -c 2,3 wrk -t2 -c64 -d20s "$url" > wrk.txt
+          read u1 s1 < <(cpu $pid)
+          kill $pid; wait $pid || true
+          local reqs=$(awk '/requests in/ {print $1}' wrk.txt)
+          echo "$r $v $s $(grep Requests/sec wrk.txt | awk '{print $2}') $reqs $((u1 - u0)) $((s1 - s0)) $TCK" | tee -a json-check.txt
+        }
+        for round in 1 2 3 4 5 6; do
+          for item in $(printf '%s\n' base:plaintext base:json head:plaintext head:json | shuf --random-source=<(yes $round)); do
+            v=${item%%:*}; s=${item##*:}
+            run $round $v $s http://127.0.0.1:8080/$s
+          done
+        done
+        python3 - <<'PY' >> $GITHUB_STEP_SUMMARY
+        import collections, statistics
+        d = collections.defaultdict(list)
+        for line in open("json-check.txt"):
+            r, v, s, rps, reqs, ut, st, tck = line.split()
+            d[(s, v)].append((float(rps), int(ut) / int(tck) / int(reqs) * 1e6, int(st) / int(tck) / int(reqs) * 1e6))
+        print("## json vs plaintext, 6 rounds in random order\n")
+        print("| scenario | variant | req/s (all rounds) | median req/s | median user µs/req | median sys µs/req |")
+        print("|---|---|---|---:|---:|---:|")
+        for (s, v), rows in sorted(d.items()):
+            print(f"| {s} | {v} | {' '.join(f'{x[0]:,.0f}' for x in rows)} | {statistics.median(x[0] for x in rows):,.0f} "
+                  f"| {statistics.median(x[1] for x in rows):.2f} | {statistics.median(x[2] for x in rows):.2f} |")
+        PY
+    - name: CPU profiles under json load
+      run: |
+        set -e
+        for v in base head; do
+          taskset -c 0,1 java -Xms512m -Xmx512m -XX:+UseParallelGC -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints \
+              -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > prof-json-$v.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 50); do grep -q READY prof-json-$v.log && break; sleep 0.2; done
+          taskset -c 2,3 wrk -t2 -c64 -d45s http://127.0.0.1:8080/json > /dev/null &
+          wrkpid=$!
+          sleep 10
+          ap/bin/asprof -d 25 -e cpu -i 997us -o collapsed -f $PWD/cpu-json-$v.collapsed $pid
+          wait $wrkpid || true
+          kill $pid; wait $pid || true
+        done
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: json-check
+        path: |
+          json-check.txt
+          cpu-json-*.collapsed
           *.log
 
   type-pollution:
