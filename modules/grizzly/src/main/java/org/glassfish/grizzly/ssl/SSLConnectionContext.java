@@ -119,7 +119,7 @@ public final class SSLConnectionContext {
         // the JDK engine (loaded by the bootstrap class loader) works on heap memory as well as on direct one: leave its
         // buffers alone. Any other engine is staged, including a JDK engine behind a delegating SSLEngine subclass or a
         // pure Java one: for them staging costs a copy per direction and no more.
-        this.stageInDirectBuffers = directEngineBuffers && sslEngine.getClass().getClassLoader() != null;
+        this.stageInDirectBuffers = directEngineBuffers;
         updateBufferSizes();
     }
 
