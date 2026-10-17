@@ -275,7 +275,7 @@ public final class ThreadCache {
             }
 
             // objects of this thread that other threads recycled
-            return owner != null ? (E) owner.takeBack(index) : null;
+            return null;
         }
     }
 
