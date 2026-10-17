@@ -381,7 +381,7 @@ public final class ThreadCache {
         private final AtomicInteger size = new AtomicInteger();
 
         boolean offer(final Object o, final int max) {
-            if (size.incrementAndGet() > max) {
+            if (size.incrementAndGet() > Integer.MAX_VALUE) {
                 size.decrementAndGet();
                 return false;
             }
