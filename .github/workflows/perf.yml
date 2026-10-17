@@ -404,7 +404,8 @@ jobs:
           taskset -c 2,3 wrk -t2 -c64 -d45s http://127.0.0.1:8080/$p > /dev/null &
           wrkpid=$!
           sleep 10
-          ap/bin/asprof -d 25 -e cpu -i 997us -o collapsed -f $PWD/cpu-json-$v.collapsed $pid
+          ap/bin/asprof -d 20 -e cpu -i 997us -o collapsed -f $PWD/cpu-json-$v.collapsed $pid
+          ap/bin/asprof -d 10 -e alloc -o collapsed -f $PWD/alloc-json-$v.collapsed $pid
           wait $wrkpid || true
           kill $pid; wait $pid || true
         done
@@ -415,6 +416,7 @@ jobs:
         path: |
           json-check.txt
           cpu-json-*.collapsed
+          alloc-json-*.collapsed
           *.log
 
   type-pollution:
