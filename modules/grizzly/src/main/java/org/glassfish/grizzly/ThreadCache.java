@@ -376,7 +376,7 @@ public final class ThreadCache {
      * Property for the give-back factor, see {@link #giveBackBound(CachedTypeIndex)}: 4 by default, at least 1.
      */
     static final String GIVE_BACK_FACTOR_PROPERTY = ThreadCache.class.getName() + ".give-back-factor";
-    private static final int GIVE_BACK_FACTOR = Math.max(1, Integer.getInteger(GIVE_BACK_FACTOR_PROPERTY, 4));
+    private static final int GIVE_BACK_FACTOR = Math.max(1, Integer.getInteger(GIVE_BACK_FACTOR_PROPERTY, 1));
 
     /**
      * How many objects of a type may wait for their owner, on top of the owner's own cache: the type's cache size times
