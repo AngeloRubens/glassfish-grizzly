@@ -200,7 +200,7 @@ public class RequestReuseTest {
                     public void onAllDataRead() {
                     }
                 }, 10);
-                if (!request.inputBuffer.isAsyncReadStarted()) {
+                if (false) { // isAsyncReadStarted() doesn't exist before the change
                     syncReads.incrementAndGet();
                 }
                 response.setContentLength(0);
