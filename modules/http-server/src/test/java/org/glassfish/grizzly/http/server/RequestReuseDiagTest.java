@@ -32,6 +32,7 @@ public class RequestReuseDiagTest {
 
     @Test
     public void count() throws Exception {
+        final StringBuilder report = new StringBuilder();
         for (final String mode : new String[] { "stream", "writer", "writer-length", "stream-chunked" }) {
             final Set<Object> packets = Collections.newSetFromMap(new IdentityHashMap<>());
             final Set<Object> requests = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -77,8 +78,9 @@ public class RequestReuseDiagTest {
             } finally {
                 server.shutdownNow();
             }
-            System.out.println("REUSE-DIAG mode=" + mode + " distinct packets=" + packets.size() + " distinct requests=" + requests.size());
+            report.append(" mode=").append(mode).append(" packets=").append(packets.size()).append(" requests=").append(requests.size());
         }
+        org.junit.Assert.fail("REUSE-DIAG" + report);
     }
 
     /** Reads one response: headers, then a Content-Length body or chunks up to the last one. */
