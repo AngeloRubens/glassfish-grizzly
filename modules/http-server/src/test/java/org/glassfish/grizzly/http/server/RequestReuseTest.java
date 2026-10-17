@@ -254,6 +254,9 @@ public class RequestReuseTest {
         final java.util.concurrent.ExecutorService resumer = java.util.concurrent.Executors.newSingleThreadExecutor();
         final java.util.concurrent.Semaphore resumed = new java.util.concurrent.Semaphore(0);
         final java.util.concurrent.atomic.AtomicInteger cancelled = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger keptByResumer = new java.util.concurrent.atomic.AtomicInteger();
+        final org.glassfish.grizzly.ThreadCache.CachedTypeIndex<FilterChainContext> contextCache = org.glassfish.grizzly.ThreadCache
+                .obtainIndex(FilterChainContext.class, 8);
         final HttpServer server = new HttpServer();
         final NetworkListener listener = new NetworkListener("cancelled", "127.0.0.1", 0);
         server.addListener(listener);
@@ -271,6 +274,7 @@ public class RequestReuseTest {
         server.getServerConfiguration().addHttpHandler(new HttpHandler() {
             @Override
             public void service(final Request request, final Response response) throws Exception {
+                final FilterChainContext readContext = request.getContext();
                 response.suspend(1, java.util.concurrent.TimeUnit.MILLISECONDS, new org.glassfish.grizzly.EmptyCompletionHandler<Response>() {
                     @Override
                     public void cancelled() {
@@ -282,6 +286,10 @@ public class RequestReuseTest {
                             } catch (final RuntimeException ignored) {
                                 // nothing to resume
                             } finally {
+                                // the context completed here stays in this thread's cache, not given back to the selector
+                                if (org.glassfish.grizzly.ThreadCache.takeFromCache(contextCache) == readContext) {
+                                    keptByResumer.incrementAndGet();
+                                }
                                 resumed.release();
                             }
                         });
@@ -305,6 +313,7 @@ public class RequestReuseTest {
             resumer.shutdownNow();
         }
         assertEquals("cancelled", requests, cancelled.get());
+        assertEquals("contexts kept by the resuming thread", requests, keptByResumer.get());
         assertEquals("contexts reused", requests, contexts.size());
     }
 
@@ -352,19 +361,16 @@ public class RequestReuseTest {
                 try (Socket socket = new Socket("127.0.0.1", listener.getPort())) {
                     socket.setSoTimeout(10_000);
                     final OutputStream out = socket.getOutputStream();
-                    final InputStream in = socket.getInputStream();
                     final Request previous = last.get();
                     out.write("POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
                     out.flush();
-                    // the response, or the connection closed on the error
-                    final StringBuilder head = new StringBuilder();
-                    int b;
-                    while (head.indexOf("\r\n\r\n") < 0 && (b = in.read()) >= 0) {
-                        head.append((char) b);
+                    final long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+                    while (last.get() == previous && System.nanoTime() < deadline) {
+                        Thread.sleep(5);
                     }
                     assertTrue("request " + i + " served", last.get() != previous);
+                    awaitRecycled(last.get());
                 }
-                awaitRecycled(last.get());
             }
         } finally {
             server.shutdownNow();
