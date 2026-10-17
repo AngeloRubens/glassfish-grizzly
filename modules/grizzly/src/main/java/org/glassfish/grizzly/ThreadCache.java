@@ -420,7 +420,6 @@ public final class ThreadCache {
                     return null;
                 }
             } while (!head.compareAndSet(h, h.next));
-            size.decrementAndGet();
             return h.item;
         }
 
