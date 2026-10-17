@@ -79,6 +79,56 @@ public class AjpRequestReuseTest extends AjpTestBase {
         }
     }
 
+    /** An AJP request whose response was suspended and resumed from another thread is not given back to the selector. */
+    @Test
+    public void suspendedAjpRequestsAreNotGivenBack() throws Exception {
+        final Set<Object> packets = Collections.newSetFromMap(new IdentityHashMap<>());
+        final Set<Object> contexts = Collections.newSetFromMap(new IdentityHashMap<>());
+        final java.util.concurrent.ExecutorService resumer = java.util.concurrent.Executors.newSingleThreadExecutor();
+        httpServer.getListener(LISTENER_NAME).getTransport()
+                .setWorkerThreadPoolConfig(ThreadPoolConfig.defaultConfig().copy().setCorePoolSize(1).setMaxPoolSize(1));
+        // the FilterChainContext of every request, completed by the resuming thread
+        httpServer.getListener(LISTENER_NAME).registerAddOn((networkListener, builder) -> builder.add(
+                builder.indexOfType(org.glassfish.grizzly.http.server.HttpServerFilter.class), new org.glassfish.grizzly.filterchain.BaseFilter() {
+                    @Override
+                    public org.glassfish.grizzly.filterchain.NextAction handleRead(final org.glassfish.grizzly.filterchain.FilterChainContext ctx) {
+                        synchronized (contexts) {
+                            contexts.add(ctx);
+                        }
+                        return ctx.getInvokeAction();
+                    }
+                }));
+        startHttpServer(new HttpHandler() {
+            @Override
+            public void service(final Request request, final Response response) throws Exception {
+                synchronized (packets) {
+                    packets.add(request.getRequest());
+                }
+                response.suspend();
+                resumer.execute(() -> {
+                    response.setStatus(200, "FINE");
+                    response.resume();
+                });
+            }
+        }, "/");
+        try {
+            for (int i = 0; i < REQUESTS; i++) {
+                final AjpForwardRequestPacket headersPacket = new AjpForwardRequestPacket("GET", "/reuse", 80, port);
+                headersPacket.addHeader("Host", "localhost:80");
+                headersPacket.addHeader("Content-Length", "0");
+                send(headersPacket.toByteArray());
+                byte[] message;
+                do {
+                    message = readAjpMessage();
+                } while (message[4] != AjpConstants.JK_AJP13_END_RESPONSE);
+            }
+        } finally {
+            resumer.shutdownNow();
+        }
+        assertEquals("AJP requests reused", REQUESTS, packets.size());
+        assertEquals("filter chain contexts reused", REQUESTS, contexts.size());
+    }
+
     private static Object cacheOwner(final Object o) throws ReflectiveOperationException {
         final java.lang.reflect.Field field = AjpHttpRequest.class.getDeclaredField("cacheOwner");
         field.setAccessible(true);
