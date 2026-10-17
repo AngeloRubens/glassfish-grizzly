@@ -33,23 +33,31 @@ public class RequestReuseDiagTest {
     @Test
     public void count() throws Exception {
         final StringBuilder report = new StringBuilder();
-        for (final String mode : new String[] { "stream", "writer", "writer-length", "stream-chunked" }) {
+        for (final String mode : new String[] { "stream", "writer", "stream-same", "writer-same" }) {
             final Set<Object> packets = Collections.newSetFromMap(new IdentityHashMap<>());
             final Set<Object> requests = Collections.newSetFromMap(new IdentityHashMap<>());
+            final Set<String> threads = Collections.synchronizedSet(new java.util.TreeSet<>());
             final HttpServer server = new HttpServer();
             final NetworkListener listener = new NetworkListener("diag", "127.0.0.1", 0);
             server.addListener(listener);
             listener.getTransport().setWorkerThreadPoolConfig(ThreadPoolConfig.defaultConfig().copy().setCorePoolSize(1).setMaxPoolSize(1));
             server.getServerConfiguration().addHttpHandler(new HttpHandler() {
                 @Override
+                public RequestExecutorProvider getRequestExecutorProvider() {
+                    return mode.endsWith("-same") ? new RequestExecutorProvider.SameThreadProvider() : super.getRequestExecutorProvider();
+                }
+
+                @Override
                 public void service(final Request request, final Response response) throws Exception {
                     synchronized (packets) {
                         packets.add(request.getRequest());
                         requests.add(request);
                     }
+                    threads.add(Thread.currentThread().getName());
                     final byte[] body = "hello".getBytes(StandardCharsets.US_ASCII);
                     switch (mode) {
                     case "stream":
+                    case "stream-same":
                         response.setContentLength(body.length);
                         response.getOutputStream().write(body);
                         break;
@@ -57,6 +65,7 @@ public class RequestReuseDiagTest {
                         response.getOutputStream().write(body);
                         break;
                     case "writer":
+                    case "writer-same":
                         response.getWriter().write("hello");
                         break;
                     default:
@@ -78,7 +87,8 @@ public class RequestReuseDiagTest {
             } finally {
                 server.shutdownNow();
             }
-            report.append(" mode=").append(mode).append(" packets=").append(packets.size()).append(" requests=").append(requests.size());
+            report.append(" mode=").append(mode).append(" packets=").append(packets.size()).append(" requests=").append(requests.size()).append(" serviceThreads=").append(threads)
+                    .append(" io=").append(listener.getTransport().getIOStrategy().getClass().getSimpleName());
         }
         org.junit.Assert.fail("REUSE-DIAG" + report);
     }
