@@ -1085,7 +1085,6 @@ public class OutputBuffer {
         if (!committed) {
             notifyCommit();
             committed = true;
-            outputHeader.getHeaders().mark();
             return true;
         }
 

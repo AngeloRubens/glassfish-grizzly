@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation.
  * Copyright (c) 2010, 2020 Oracle and/or its affiliates. All rights reserved.
  *
  * This program and the accompanying materials are made available under the
@@ -218,6 +219,8 @@ public class AjpHandlerFilter extends BaseFilter {
             }
 
             httpHeader.setCommitted(true);
+            // the headers are on the wire now: from here on, names not allowed in trailers are refused
+            httpHeader.getHeaders().mark();
         }
 
         if (!isHeader) {

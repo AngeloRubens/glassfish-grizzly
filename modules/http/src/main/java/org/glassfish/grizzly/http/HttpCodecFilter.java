@@ -1584,6 +1584,9 @@ public abstract class HttpCodecFilter extends HttpBaseFilter implements Monitori
             encodedBuffer.allowBufferDispose(true);
 
             httpHeader.setCommitted(true);
+            // the headers are on the wire now: from here on, names not allowed in trailers are refused. Marking them only
+            // here lets the filters add their own headers, such as Date, while serializing them
+            mimeHeaders.mark();
 
             HttpProbeNotifier.notifyHeaderSerialize(this, connection, httpHeader, encodedBuffer);
         }

@@ -301,6 +301,8 @@ class DefaultOutputSink implements StreamOutputSink {
                 stream.onSndHeaders(dontSendPayload);
 
                 httpHeader.setCommitted(true);
+                // the headers are on the wire now: from here on, names not allowed in trailers are refused
+                httpHeader.getHeaders().mark();
 
                 if (dontSendPayload || httpContent == null) {
                     // if we don't expect any HTTP payload, mark this frame as last and return
