@@ -429,10 +429,10 @@ public class HttpServerFilter extends BaseFilter implements MonitoringAware<Http
         // been broken. We don't want to reuse Request and Response in this state,
         // cause there still might be threads referencing them.
         // only a request that completed synchronously goes back to the thread that created it (see Request#create())
-        if (response.suspendState != Response.SuspendState.NONE || request.inputBuffer.isAsyncReadStarted()) {
-            request.keepCachesLocal();
-        }
         if (response.suspendState != Response.SuspendState.CANCELLED) {
+            if (response.suspendState != Response.SuspendState.NONE || request.inputBuffer.isAsyncReadStarted()) {
+                request.keepCachesLocal();
+            }
             response.recycle();
             request.recycle();
         }
