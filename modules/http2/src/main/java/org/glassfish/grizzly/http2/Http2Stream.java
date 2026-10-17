@@ -168,6 +168,9 @@ public class Http2Stream implements AttributeStorage, OutputSink, Closeable {
         outputSink = new DefaultOutputSink(this);
 
         HTTP_RQST_HTTP2_STREAM_ATTR.set(request, this);
+        if (request instanceof Http2Request) {
+            ((Http2Request) request).onStreamAttached();
+        }
     }
 
     /**
@@ -641,6 +644,10 @@ public class Http2Stream implements AttributeStorage, OutputSink, Closeable {
         // TODO ensure stream proper transitions to CLOSED state
         // Http2StreamState.close(this);
         http2Session.deregisterStream(this);
+        if (request instanceof Http2Request) {
+            // the request can be reused once its processing is done too
+            ((Http2Request) request).onStreamClosed();
+        }
     }
 
     HttpHeader getInputHttpHeader() {

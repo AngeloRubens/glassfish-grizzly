@@ -17,6 +17,8 @@
 
 package org.glassfish.grizzly.http2;
 
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+
 import org.glassfish.grizzly.ThreadCache;
 import org.glassfish.grizzly.http.HttpRequestPacket;
 import org.glassfish.grizzly.http.ProcessingState;
@@ -47,6 +49,11 @@ class Http2Request extends HttpRequestPacket implements Http2Header {
 
     // the cache of the thread that created this request, see #create()
     private ThreadCache.Owner cacheOwner;
+
+    // whether a stream refers to this request, and how many of the stream and the processing released it, see #recycle()
+    private volatile boolean streamAttached;
+    private volatile int releases;
+    private static final AtomicIntegerFieldUpdater<Http2Request> RELEASES = AtomicIntegerFieldUpdater.newUpdater(Http2Request.class, "releases");
 
     private final Http2Response response;
 
@@ -148,8 +155,39 @@ class Http2Request extends HttpRequestPacket implements Http2Header {
         super.reset();
     }
 
+    /**
+     * Recycles this request once both its stream and its processing are done with it: the stream may still receive
+     * frames (trailers, DATA, RST_STREAM) after the response, and they must not reach a request that another stream is
+     * already using.
+     */
     @Override
     public void recycle() {
+        if (streamAttached) {
+            release();
+        } else {
+            recycle0();
+        }
+    }
+
+    /** The stream of this request was created: it releases the request when it is closed. */
+    void onStreamAttached() {
+        streamAttached = true;
+    }
+
+    /** The stream of this request is closed: no frame reaches the request any more. */
+    void onStreamClosed() {
+        release();
+    }
+
+    private void release() {
+        if (RELEASES.incrementAndGet(this) == 2) {
+            recycle0();
+        }
+    }
+
+    private void recycle0() {
+        streamAttached = false;
+        releases = 0;
         reset();
 
         final ThreadCache.Owner owner = cacheOwner;
