@@ -33,8 +33,11 @@ on:
         description: Extra JMH arguments
         default: ""
       json_check:
-        description: "Also run the json vs plaintext investigation (true/false)"
+        description: "Also run the randomized-order A/B of check_paths (true/false)"
         default: "false"
+      check_paths:
+        description: "Paths for the randomized-order A/B (space separated); the first one is also profiled"
+        default: "plaintext json"
   push:
     branches: [ "perf/**" ]
 
@@ -329,7 +332,7 @@ jobs:
           *.log
 
   json-check:
-    name: json vs plaintext (randomized order, profiles)
+    name: Randomized-order A/B (check_paths, profiles)
     if: ${{ inputs.json_check == 'true' }}
     runs-on: ubuntu-latest
     needs: build
@@ -347,7 +350,9 @@ jobs:
         sudo sysctl -w kernel.perf_event_paranoid=1 kernel.kptr_restrict=0
         curl -sSfL https://github.com/async-profiler/async-profiler/releases/download/v$ASYNC_PROFILER_VERSION/async-profiler-$ASYNC_PROFILER_VERSION-linux-x64.tar.gz | tar xz
         mv async-profiler-$ASYNC_PROFILER_VERSION-linux-x64 ap
-    - name: Randomized A/B, plaintext and json only
+    - name: Randomized A/B of the check paths
+      env:
+        CHECK_PATHS: ${{ inputs.check_paths || 'plaintext json' }}
       run: |
         set -e
         JVM="-Xms512m -Xmx512m -XX:+UseParallelGC"
@@ -367,7 +372,7 @@ jobs:
           echo "$r $v $s $(grep Requests/sec wrk.txt | awk '{print $2}') $reqs $((u1 - u0)) $((s1 - s0)) $TCK" | tee -a json-check.txt
         }
         for round in 1 2 3 4 5 6; do
-          for item in $(printf '%s\n' base:plaintext base:json head:plaintext head:json | shuf --random-source=<(yes $round)); do
+          for item in $(for p in $CHECK_PATHS; do echo base:$p; echo head:$p; done | shuf --random-source=<(yes $round)); do
             v=${item%%:*}; s=${item##*:}
             run $round $v $s http://127.0.0.1:8080/$s
           done
@@ -378,22 +383,25 @@ jobs:
         for line in open("json-check.txt"):
             r, v, s, rps, reqs, ut, st, tck = line.split()
             d[(s, v)].append((float(rps), int(ut) / int(tck) / int(reqs) * 1e6, int(st) / int(tck) / int(reqs) * 1e6))
-        print("## json vs plaintext, 6 rounds in random order\n")
+        print("## Randomized A/B, 6 rounds in random order\n")
         print("| scenario | variant | req/s (all rounds) | median req/s | median user µs/req | median sys µs/req |")
         print("|---|---|---|---:|---:|---:|")
         for (s, v), rows in sorted(d.items()):
             print(f"| {s} | {v} | {' '.join(f'{x[0]:,.0f}' for x in rows)} | {statistics.median(x[0] for x in rows):,.0f} "
                   f"| {statistics.median(x[1] for x in rows):.2f} | {statistics.median(x[2] for x in rows):.2f} |")
         PY
-    - name: CPU profiles under json load
+    - name: CPU profiles under load of the first check path
+      env:
+        CHECK_PATHS: ${{ inputs.check_paths || 'plaintext json' }}
       run: |
         set -e
+        p=${CHECK_PATHS%% *}
         for v in base head; do
           taskset -c 0,1 java -Xms512m -Xmx512m -XX:+UseParallelGC -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints \
               -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > prof-json-$v.log 2>&1 &
           pid=$!
           for i in $(seq 1 50); do grep -q READY prof-json-$v.log && break; sleep 0.2; done
-          taskset -c 2,3 wrk -t2 -c64 -d45s http://127.0.0.1:8080/json > /dev/null &
+          taskset -c 2,3 wrk -t2 -c64 -d45s http://127.0.0.1:8080/$p > /dev/null &
           wrkpid=$!
           sleep 10
           ap/bin/asprof -d 25 -e cpu -i 997us -o collapsed -f $PWD/cpu-json-$v.collapsed $pid
