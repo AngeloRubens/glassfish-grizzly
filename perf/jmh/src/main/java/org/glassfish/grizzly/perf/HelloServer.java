@@ -67,6 +67,13 @@ public final class HelloServer {
 
             @Override
             public void service(final Request request, final Response response) throws Exception {
+                if (request.getRequestURI().startsWith("/text-small")) {
+                    // a short character response through the Writer (the size of a small JSON or text API answer)
+                    response.setContentType("text/plain;charset=UTF-8");
+                    response.setHeader("Server", "grizzly");
+                    response.getWriter().write("Hello, World! A short answer written through the Writer.");
+                    return;
+                }
                 if (request.getRequestURI().startsWith("/text")) {
                     // character output through the Writer (char -> UTF-8 encoding path)
                     response.setContentType("text/html;charset=UTF-8");

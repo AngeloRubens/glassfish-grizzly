@@ -224,6 +224,7 @@ jobs:
           run $1 plaintext-pipelined16 -s pipeline.lua http://127.0.0.1:8080/plaintext -- 16
           run $1 json http://127.0.0.1:8080/json
           run $1 text http://127.0.0.1:8080/text
+          run $1 text-small http://127.0.0.1:8080/text-small
           run $1 plaintext-browser-headers "${BROWSER_HEADERS[@]}" "http://127.0.0.1:8080/static/js/app.bundle.js?v=20261013&lang=it"
           run_h2 $1 h2-plaintext
         }
