@@ -16,9 +16,10 @@
 
 package org.glassfish.grizzly.http.server;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
@@ -31,6 +32,9 @@ import org.junit.Test;
  */
 public class DateHeaderTest {
 
+    private static final String OWN_DATE = "Thu, 01 Jan 1970 00:00:00 GMT";
+
+    /** Two responses on one keep-alive connection, then one whose Date the application set itself. */
     @Test
     public void responsesCarryADateHeader() throws Exception {
         final HttpServer server = new HttpServer();
@@ -39,6 +43,9 @@ public class DateHeaderTest {
         server.getServerConfiguration().addHttpHandler(new HttpHandler() {
             @Override
             public void service(final Request request, final Response response) throws Exception {
+                if (request.getRequestURI().equals("/own")) {
+                    response.setHeader("Date", OWN_DATE);
+                }
                 response.getWriter().write("hello");
             }
         }, "/");
@@ -46,16 +53,45 @@ public class DateHeaderTest {
         try (Socket socket = new Socket("127.0.0.1", listener.getPort())) {
             socket.setSoTimeout(10_000);
             final OutputStream out = socket.getOutputStream();
-            out.write("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
-            out.flush();
             final InputStream in = socket.getInputStream();
-            final ByteArrayOutputStream response = new ByteArrayOutputStream();
-            in.transferTo(response);
-            final String text = response.toString(StandardCharsets.ISO_8859_1);
-            final String head = text.substring(0, text.indexOf("\r\n\r\n") + 2).toLowerCase();
-            assertTrue("no Date header in:\n" + text, head.contains("\r\ndate: "));
+            for (int i = 0; i < 2; i++) {
+                final String head = exchange(out, in, "/", false);
+                assertEquals("Date headers in response " + i + ":\n" + head, 1, count(head, "\r\ndate: "));
+            }
+            final String own = exchange(out, in, "/own", true);
+            assertEquals("Date headers:\n" + own, 1, count(own, "\r\ndate: "));
+            assertTrue(own, own.contains("\r\ndate: " + OWN_DATE.toLowerCase() + "\r\n"));
         } finally {
             server.shutdownNow();
         }
+    }
+
+    /** Sends a GET and returns the lower-cased head of the response, after reading its body. */
+    private static String exchange(final OutputStream out, final InputStream in, final String uri, final boolean close) throws Exception {
+        out.write(("GET " + uri + " HTTP/1.1\r\nHost: localhost\r\n" + (close ? "Connection: close\r\n" : "") + "\r\n")
+                .getBytes(StandardCharsets.US_ASCII));
+        out.flush();
+        final StringBuilder head = new StringBuilder();
+        while (head.indexOf("\r\n\r\n") < 0) {
+            final int b = in.read();
+            if (b < 0) {
+                throw new EOFException(head.toString());
+            }
+            head.append((char) b);
+        }
+        final String lower = head.toString().toLowerCase();
+        final int cl = lower.indexOf("\r\ncontent-length: ");
+        assertTrue("no Content-Length in:\n" + head, cl >= 0);
+        final int length = Integer.parseInt(lower.substring(cl + 18, lower.indexOf("\r\n", cl + 2)).trim());
+        assertEquals(length, in.readNBytes(length).length);
+        return lower;
+    }
+
+    private static int count(final String text, final String part) {
+        int n = 0;
+        for (int i = text.indexOf(part); i >= 0; i = text.indexOf(part, i + 1)) {
+            n++;
+        }
+        return n;
     }
 }

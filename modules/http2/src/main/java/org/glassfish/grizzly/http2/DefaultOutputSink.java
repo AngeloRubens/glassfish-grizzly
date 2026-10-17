@@ -301,7 +301,7 @@ class DefaultOutputSink implements StreamOutputSink {
                 stream.onSndHeaders(dontSendPayload);
 
                 httpHeader.setCommitted(true);
-                // from now on a header added is a trailer field, see HttpCodecFilter#encodeHttpPacket
+                // the headers are on the wire now: from here on, names not allowed in trailers are refused
                 httpHeader.getHeaders().mark();
 
                 if (dontSendPayload || httpContent == null) {
