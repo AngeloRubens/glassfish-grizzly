@@ -95,7 +95,7 @@ public final class ThreadCache {
             return currentCache.put(index, o);
         }
         // another thread's object: no cache is created on this thread for it
-        return owner.giveBack(index, o);
+        return putToCache(index, o);
     }
 
     private static ObjectCache currentObjectCache() {
