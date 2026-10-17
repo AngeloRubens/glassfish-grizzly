@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 Contributors to the Eclipse Foundation
+ * Copyright (c) 2022, 2026 Contributors to the Eclipse Foundation
  * Copyright (c) 2012, 2020 Oracle and/or its affiliates. All rights reserved.
  *
  * This program and the accompanying materials are made available under the
@@ -29,18 +29,24 @@ import org.glassfish.grizzly.http.util.Header;
  */
 class Http2Request extends HttpRequestPacket implements Http2Header {
 
-    private static final ThreadCache.CachedTypeIndex<Http2Request> CACHE_IDX = ThreadCache.obtainIndex(Http2Request.class, 2);
+    // one connection carries many concurrent streams: room for more than a couple of requests
+    private static final ThreadCache.CachedTypeIndex<Http2Request> CACHE_IDX = ThreadCache.obtainIndex(Http2Request.class, 16);
 
     public static Http2Request create() {
         Http2Request http2Request = ThreadCache.takeFromCache(CACHE_IDX);
         if (http2Request == null) {
             http2Request = new Http2Request();
         }
+        // service() and the recycle usually run on a worker thread, not on this one: give it back to this thread
+        http2Request.cacheOwner = ThreadCache.currentOwner();
 
         return http2Request.init();
     }
 
     private final ProcessingState processingState = new ProcessingState();
+
+    // the cache of the thread that created this request, see #create()
+    private ThreadCache.Owner cacheOwner;
 
     private final Http2Response response;
 
@@ -146,7 +152,10 @@ class Http2Request extends HttpRequestPacket implements Http2Header {
     public void recycle() {
         reset();
 
-        ThreadCache.putToCache(CACHE_IDX, this);
+        final ThreadCache.Owner owner = cacheOwner;
+        // a retained request must not keep its owner's returned objects alive
+        cacheOwner = null;
+        ThreadCache.putToOwnerCache(owner, CACHE_IDX, this);
     }
 
     @Override
