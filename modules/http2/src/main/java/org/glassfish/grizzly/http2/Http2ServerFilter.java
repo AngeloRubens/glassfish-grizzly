@@ -536,9 +536,7 @@ public class Http2ServerFilter extends Http2BaseFilter {
         }
         // the HTTP/1.1 request becomes the request of stream 1, which may still use it after the request is recycled:
         // it must not go back to the thread that created it, which could hand it to another connection at once
-        if (httpRequest instanceof ThreadCache.OwnerAware) {
-            ((ThreadCache.OwnerAware) httpRequest).keepInRecyclingThreadCache();
-        }
+
         // create a virtual stream for this request
         final Http2Stream stream = http2Session.acceptUpgradeStream(httpRequest, 0, !httpRequest.isExpectContent());
 
