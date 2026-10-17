@@ -937,7 +937,8 @@ public class HttpServerFilter extends HttpCodecFilter {
         }
 
         if (!response.containsHeader(Header.Date)) {
-            response.getHeaders().addValue(Header.Date).setBytes(HttpDateFormat.getCurrentDateBytes());
+            // experiment: no Date header
+            // response.getHeaders().addValue(Header.Date).setBytes(HttpDateFormat.getCurrentDateBytes());
         }
 
         final ProcessingState state = response.getProcessingState();
