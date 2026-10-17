@@ -17,6 +17,7 @@
 package org.glassfish.grizzly.http.server;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.InputStream;
@@ -27,6 +28,9 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
 
+import org.glassfish.grizzly.filterchain.BaseFilter;
+import org.glassfish.grizzly.filterchain.FilterChainContext;
+import org.glassfish.grizzly.filterchain.NextAction;
 import org.glassfish.grizzly.threadpool.ThreadPoolConfig;
 import org.junit.Test;
 
@@ -44,10 +48,21 @@ public class RequestReuseTest {
         final Set<Object> packets = Collections.newSetFromMap(new IdentityHashMap<>());
         final Set<Object> requests = Collections.newSetFromMap(new IdentityHashMap<>());
         final Set<String> serviceThreads = Collections.synchronizedSet(new java.util.TreeSet<>());
+        final Set<Object> contexts = Collections.newSetFromMap(new IdentityHashMap<>());
         final HttpServer server = new HttpServer();
         final NetworkListener listener = new NetworkListener("reuse", "127.0.0.1", 0);
         server.addListener(listener);
         listener.getTransport().setWorkerThreadPoolConfig(ThreadPoolConfig.defaultConfig().copy().setCorePoolSize(1).setMaxPoolSize(1));
+        // the FilterChainContext of every read, taken on the selector thread and completed on the worker
+        listener.registerAddOn((networkListener, builder) -> builder.add(builder.indexOfType(HttpServerFilter.class), new BaseFilter() {
+            @Override
+            public NextAction handleRead(final FilterChainContext ctx) {
+                synchronized (contexts) {
+                    contexts.add(ctx);
+                }
+                return ctx.getInvokeAction();
+            }
+        }));
         server.getServerConfiguration().addHttpHandler(new HttpHandler() {
             @Override
             public void service(final Request request, final Response response) throws Exception {
@@ -77,6 +92,36 @@ public class RequestReuseTest {
         assertEquals("service() on one worker thread: " + serviceThreads, 1, serviceThreads.size());
         assertTrue("distinct request packets for " + REQUESTS + " requests: " + packets.size(), packets.size() <= 3);
         assertTrue("distinct requests for " + REQUESTS + " requests: " + requests.size(), requests.size() <= 3);
+        assertTrue("distinct filter chain contexts for " + REQUESTS + " requests: " + contexts.size(), contexts.size() <= 4);
+        // every one of them is recycled (the worker may still be finishing the last one): none keeps the selector
+        // thread's returned objects alive
+        awaitNoOwner(packets);
+        awaitNoOwner(requests);
+        awaitNoOwner(contexts);
+    }
+
+    /** Waits up to 10 s until none of the objects references an owner any more. */
+    static void awaitNoOwner(final Set<Object> objects) throws Exception {
+        final long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        for (final Object o : objects) {
+            while (cacheOwner(o) != null && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertNull("owner kept by a recycled " + o.getClass().getSimpleName(), cacheOwner(o));
+        }
+    }
+
+    static Object cacheOwner(final Object o) throws ReflectiveOperationException {
+        for (Class<?> c = o.getClass(); c != null; c = c.getSuperclass()) {
+            try {
+                final java.lang.reflect.Field field = c.getDeclaredField("cacheOwner");
+                field.setAccessible(true);
+                return field.get(o);
+            } catch (NoSuchFieldException e) {
+                // look in the superclass
+            }
+        }
+        throw new NoSuchFieldException("cacheOwner in " + o.getClass());
     }
 
     /** Reads a response with a 5-byte body and returns its head. */

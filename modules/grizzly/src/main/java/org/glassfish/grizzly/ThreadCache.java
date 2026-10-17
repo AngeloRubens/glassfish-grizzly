@@ -61,7 +61,7 @@ public final class ThreadCache {
 
     /**
      * The {@link Owner} of the current thread's cache: an object taken from the cache (or created) on this thread can
-     * remember it, so that {@link #putToCache(Owner, CachedTypeIndex, Object)} gives it back to this thread when another
+     * remember it, so that {@link #putToOwnerCache(Owner, CachedTypeIndex, Object)} gives it back to this thread when another
      * thread recycles it.
      *
      * @return the current thread's {@link Owner}
@@ -76,6 +76,7 @@ public final class ThreadCache {
      * {@link #putToCache(CachedTypeIndex, Object)}; from any other thread the object goes to a bounded queue of the owner,
      * which the owner's {@link #takeFromCache(CachedTypeIndex)} drains when its own cache is empty. This keeps objects
      * reusable when they are created on one thread (for example a selector thread) and recycled on another (a worker).
+     * The queue is bounded, see the give-back factor property {@code org.glassfish.grizzly.ThreadCache.give-back-factor}.
      *
      * @param owner the {@link Owner} of the thread the object was taken or created on, or {@code null} for the current
      * thread
@@ -84,11 +85,17 @@ public final class ThreadCache {
      * @return {@code true} if the object was cached
      * @since 5.0.4
      */
-    public static <E> boolean putToCache(final Owner owner, final CachedTypeIndex<E> index, final E o) {
-        final ObjectCache objectCache = currentObjectCache();
-        if (owner == null || owner == objectCache.owner) {
-            return objectCache.put(index, o);
+    public static <E> boolean putToOwnerCache(final Owner owner, final CachedTypeIndex<E> index, final E o) {
+        if (owner == null) {
+            return putToCache(index, o);
         }
+        final Thread currentThread = Thread.currentThread();
+        final ObjectCache currentCache = currentThread instanceof DefaultWorkerThread ? ((DefaultWorkerThread) currentThread).getObjectCache()
+                : genericCacheAttr.get();
+        if (currentCache != null && owner == currentCache.owner) {
+            return currentCache.put(index, o);
+        }
+        // another thread's object: no cache is created on this thread for it
         return owner.giveBack(index, o);
     }
 
@@ -326,7 +333,7 @@ public final class ThreadCache {
 
     /**
      * The objects that other threads gave back to a thread's cache, see {@link ThreadCache#currentOwner()}. Any thread may
-     * give an object back; only the owner thread takes them.
+     * give an object back; the owner thread takes them when its own cache is empty.
      *
      * @since 5.0.4
      */
@@ -337,7 +344,7 @@ public final class ThreadCache {
         }
 
         boolean giveBack(final CachedTypeIndex<?> index, final Object o) {
-            return queue(index.getIndex()).offer(o, index.getSize());
+            return queue(index.getIndex()).offer(o, giveBackBound(index));
         }
 
         Object takeBack(final CachedTypeIndex<?> index) {
@@ -366,8 +373,26 @@ public final class ThreadCache {
     }
 
     /**
-     * A bounded stack that many threads push to and one thread pops from. A node is never pushed twice, so popping with
-     * a compare-and-set has no ABA problem.
+     * Property for the give-back factor, see {@link #giveBackBound(CachedTypeIndex)}: 4 by default, at least 1.
+     */
+    static final String GIVE_BACK_FACTOR_PROPERTY = ThreadCache.class.getName() + ".give-back-factor";
+    private static final int GIVE_BACK_FACTOR = Math.max(1, Integer.getInteger(GIVE_BACK_FACTOR_PROPERTY, 4));
+
+    /**
+     * How many objects of a type may wait for their owner, on top of the owner's own cache: the type's cache size times
+     * the give-back factor, because one owner may get back the objects of many recycling threads at once. The objects
+     * kept per owner thread and type are therefore bounded by the cache size times (1 + factor); they don't grow with the
+     * number of connections. An owner thread that stays alive but no longer takes keeps them until it ends.
+     */
+    static int giveBackBound(final CachedTypeIndex<?> index) {
+        return (int) Math.min(Integer.MAX_VALUE, (long) index.getSize() * GIVE_BACK_FACTOR);
+    }
+
+    /**
+     * A bounded lock-free stack. Every push allocates a new node and writes its link before the publishing
+     * compare-and-set, and a node is never pushed twice, so popping with a compare-and-set has no ABA problem, even if
+     * several threads pop. The node count never exceeds the bound (the size is incremented and checked before the push,
+     * and decremented after the pop); only the counter can briefly overshoot, which rejects an offer, never retains more.
      */
     private static final class ReturnQueue {
         private final AtomicReference<Node> head = new AtomicReference<>();
