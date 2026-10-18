@@ -64,7 +64,6 @@ public final class AjpHttpRequest extends HttpRequestPacket implements ThreadCac
 
     @Override
     public void keepInRecyclingThreadCache() {
-        cacheOwner = null;
     }
 
     private String secret;
