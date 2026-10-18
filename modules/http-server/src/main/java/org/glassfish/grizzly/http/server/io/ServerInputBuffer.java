@@ -106,9 +106,6 @@ public class ServerInputBuffer extends InputBuffer {
     public void recycle() {
         serverRequest = null;
         totalReadContentInBytes = 0;
-        if (asyncReadStarted) {
-            asyncReadStarted = false;
-        }
         super.recycle();
     }
 
