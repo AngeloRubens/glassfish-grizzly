@@ -1270,7 +1270,7 @@ public abstract class HttpCodecFilter extends HttpBaseFilter implements Monitori
             return null;
         }
         final ByteBuffer view = input.toByteBuffer();
-        return view.isDirect() && !view.isReadOnly() ? view : null;
+        return !view.isReadOnly() ? view : null;
     }
 
     private static void finalizeKnownHeaderNames(final HttpHeader httpHeader, final HeaderParsingState parsingState, final Buffer input, final int start,
