@@ -364,7 +364,7 @@ jobs:
         cpu() { awk '{print $14, $15}' /proc/$1/stat; }
         run() { # round variant scenario url
           local r=$1 v=$2 s=$3 url=$4
-          taskset -c 0,1 java $JVM $SERVER_PROPS -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > server-$v.log 2>&1 &
+          taskset -c 0,1 java $JVM $SERVER_PROPS -Xlog:gc:file=gc-$v-$r-$s.log -cp $v.jar org.glassfish.grizzly.perf.HelloServer 8080 > server-$v.log 2>&1 &
           local pid=$!
           for i in $(seq 1 50); do grep -q READY server-$v.log && break; sleep 0.2; done
           taskset -c 2,3 wrk -t2 -c64 -d10s "$url" > /dev/null
@@ -420,6 +420,7 @@ jobs:
         name: json-check
         path: |
           json-check.txt
+          gc-*.log
           cpu-json-*.collapsed
           alloc-json-*.collapsed
           *.log
