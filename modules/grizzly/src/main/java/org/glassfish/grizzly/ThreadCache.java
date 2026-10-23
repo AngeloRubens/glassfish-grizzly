@@ -68,6 +68,10 @@ public final class ThreadCache {
      * @since 5.0.4
      */
     public static Owner currentOwner() {
+        final Thread currentThread = Thread.currentThread();
+        if (currentThread.isVirtual()) {
+            return virtualOwner(currentThread);
+        }
         return currentObjectCache().owner();
     }
 
@@ -97,6 +101,23 @@ public final class ThreadCache {
         }
         // another thread's object: no cache is created on this thread for it
         return owner.giveBack(index, o);
+    }
+
+    /**
+     * Virtual threads share a few owners instead of having one each: a virtual thread's cache would end with it, so the
+     * objects of the virtual threads go back to a stripe chosen by thread id, and the next virtual threads take them there.
+     */
+    private static final Owner[] VIRTUAL_OWNERS = new Owner[Math.max(2,
+            Integer.highestOneBit(Math.max(1, Integer.getInteger(ThreadCache.class.getName() + ".virtual-stripes", Runtime.getRuntime().availableProcessors())) * 2 - 1))];
+
+    static {
+        for (int i = 0; i < VIRTUAL_OWNERS.length; i++) {
+            VIRTUAL_OWNERS[i] = new Owner();
+        }
+    }
+
+    private static Owner virtualOwner(final Thread virtualThread) {
+        return VIRTUAL_OWNERS[(int) (virtualThread.threadId() & (VIRTUAL_OWNERS.length - 1))];
     }
 
     private static ObjectCache currentObjectCache() {
@@ -189,10 +210,13 @@ public final class ThreadCache {
         } else {
             final ObjectCache genericCache = genericCacheAttr.get();
             if (genericCache != null) {
-                return genericCache.take(index);
+                final E o = genericCache.take(index);
+                if (o != null) {
+                    return o;
+                }
             }
-
-            return null;
+            // a virtual thread's own cache ends with it: take what other virtual threads gave back
+            return currentThread.isVirtual() ? (E) virtualOwner(currentThread).takeBack(index) : null;
         }
     }
 
