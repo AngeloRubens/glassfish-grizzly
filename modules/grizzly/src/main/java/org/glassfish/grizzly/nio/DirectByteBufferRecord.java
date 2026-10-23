@@ -34,6 +34,17 @@ public final class DirectByteBufferRecord {
             DirectByteBufferRecord.class, 1);
 
     public static DirectByteBufferRecord get() {
+        final Thread currentThread = Thread.currentThread();
+        if (currentThread.isVirtual()) {
+            // a virtual thread's cache ends with it, and every read or write event may run on a new virtual thread: take a
+            // record that another virtual thread released instead of allocating a direct buffer again; #release() gives it back
+            DirectByteBufferRecord virtualRecord = ThreadCache.takeFromCache(currentThread, CACHE_IDX);
+            if (virtualRecord == null) {
+                virtualRecord = new DirectByteBufferRecord();
+            }
+            virtualRecord.owner = ThreadCache.currentOwner();
+            return virtualRecord;
+        }
         final DirectByteBufferRecord record = ThreadCache.getFromCache(CACHE_IDX);
         if (record != null) {
             return record;
@@ -43,6 +54,8 @@ public final class DirectByteBufferRecord {
         return recordLocal;
     }
 
+    // set for a record taken by a virtual thread: where #release() gives it back
+    private ThreadCache.Owner owner;
     private ByteBuffer directBuffer;
     private int sliceOffset;
     private ByteBuffer directBufferSlice;
@@ -118,6 +131,12 @@ public final class DirectByteBufferRecord {
         arraySize = 0;
         directBufferSlice = null;
         sliceOffset = 0;
+
+        final ThreadCache.Owner ownerLocal = owner;
+        if (ownerLocal != null) {
+            owner = null;
+            ThreadCache.putToOwnerCache(ownerLocal, CACHE_IDX, this);
+        }
     }
 
     private ByteBuffer switchToStrong() {
