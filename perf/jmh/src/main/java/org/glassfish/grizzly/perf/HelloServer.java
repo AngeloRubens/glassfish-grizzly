@@ -21,6 +21,7 @@ import org.glassfish.grizzly.http.server.Request;
 import org.glassfish.grizzly.http.server.RequestExecutorProvider;
 import org.glassfish.grizzly.http.server.Response;
 import org.glassfish.grizzly.http2.Http2AddOn;
+import org.glassfish.grizzly.strategies.WorkerThreadIOStrategy;
 import org.glassfish.grizzly.threadpool.Threads;
 import org.glassfish.grizzly.threadpool.VirtualThreadExecutorService;
 
@@ -103,6 +104,13 @@ public final class HelloServer {
         if (Boolean.getBoolean("perf.h2")) {
             // HTTP/2 over cleartext (prior knowledge or upgrade) next to HTTP/1.1
             server.getListener("grizzly").registerAddOn(new Http2AddOn());
+        }
+        if ("virtual".equals(System.getProperty("perf.workers"))) {
+            // the whole read (parsing, service(), response) runs on a virtual thread per read event, no selector parsing
+            // (combine with -Dperf.executor=same, so that service() stays on that thread)
+            final var transport = server.getListener("grizzly").getTransport();
+            transport.setIOStrategy(WorkerThreadIOStrategy.getInstance());
+            transport.setWorkerThreadPool(VirtualThreadExecutorService.createInstance());
         }
         server.start();
         System.out.println("READY " + port + " executor=" + executor + " tls=" + tls);
