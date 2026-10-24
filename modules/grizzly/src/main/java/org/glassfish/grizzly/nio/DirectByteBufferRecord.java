@@ -160,10 +160,6 @@ public final class DirectByteBufferRecord {
      * virtual thread took it in the meantime.
      */
     public void release() {
-        if (virtual && pool == null) {
-            // released already
-            return;
-        }
         if (directBuffer != null) {
             directBuffer.clear();
             switchToSoft();
@@ -177,7 +173,6 @@ public final class DirectByteBufferRecord {
         final VirtualPool poolLocal = pool;
         if (poolLocal != null) {
             // from here on another virtual thread may take this record
-            pool = null;
             poolLocal.offer(this);
         }
     }
