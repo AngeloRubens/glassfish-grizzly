@@ -211,7 +211,7 @@ public final class DirectByteBufferRecord {
         DirectByteBufferRecord take() {
             for (int i = 0; i < slots.length(); i++) {
                 final DirectByteBufferRecord record = slots.get(i);
-                if (record != null && slots.compareAndSet(i, record, null)) {
+                if (record != null) {
                     return record;
                 }
             }
