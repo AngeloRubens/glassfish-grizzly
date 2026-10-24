@@ -61,7 +61,7 @@ public final class DirectByteBufferRecord {
      */
     public static DirectByteBufferRecord get() {
         final Thread currentThread = Thread.currentThread();
-        if (currentThread.isVirtual()) {
+        if (false && currentThread.isVirtual()) {
             final VirtualPool pool = VIRTUAL_POOLS[(int) (currentThread.threadId() & (VIRTUAL_POOLS.length - 1))];
             DirectByteBufferRecord virtualRecord = pool.take();
             if (virtualRecord == null) {
