@@ -126,6 +126,7 @@ public final class ProcessorExecutor {
         }
 
         void runTasks() {
+            Error error = null;
             try {
                 // a task may register further tasks: count is re-read
                 for (int i = 0; i < count; i++) {
@@ -136,14 +137,21 @@ public final class ProcessorExecutor {
                     tasks[i] = null;
                     try {
                         task.run();
-                    } catch (Throwable t) {
-                        // the task of a connection closes it, see NIOConnection.uncorkWrites()
-                        LOGGER.log(Level.WARNING, "Task at the end of a READ processing run failed", t);
+                    } catch (RuntimeException e) {
+                        LOGGER.log(Level.WARNING, "Task at the end of a READ processing run failed", e);
+                    } catch (Error e) {
+                        // run the other tasks first
+                        if (error == null) {
+                            error = e;
+                        }
                     }
                 }
             } finally {
                 Arrays.fill(tasks, 0, count, null);
                 count = 0;
+            }
+            if (error != null) {
+                throw error;
             }
         }
     }
@@ -152,7 +160,8 @@ public final class ProcessorExecutor {
     private static void execute0(Context context, final ReadRun run) {
         boolean isRerun;
         ProcessorResult result;
-        boolean runEnded = false;
+        boolean runEnded = run == null;
+        Error endError = null;
 
         try {
             do {
@@ -166,13 +175,25 @@ public final class ProcessorExecutor {
             } while (isRerun);
 
             runEnded = true;
-            endRun(run);
+            if (run != null) {
+                try {
+                    run.end();
+                } catch (Error e) {
+                    // complete the context first, so READ interest is enabled again
+                    endError = e;
+                }
+            }
 
             complete0(context, result);
 
         } catch (Throwable t) {
             if (!runEnded) {
-                endRun(run);
+                runEnded = true;
+                try {
+                    run.end();
+                } catch (Throwable endFailure) {
+                    t.addSuppressed(endFailure);
+                }
             }
 
             if (LOGGER.isLoggable(Level.WARNING)) {
@@ -185,16 +206,9 @@ public final class ProcessorExecutor {
             } catch (Exception ignored) {
             }
         }
-    }
 
-    private static void endRun(final ReadRun run) {
-        if (run == null) {
-            return;
-        }
-        try {
-            run.end();
-        } catch (Throwable t) {
-            LOGGER.log(Level.WARNING, "Ending a READ processing run failed", t);
+        if (endError != null) {
+            throw endError;
         }
     }
 
