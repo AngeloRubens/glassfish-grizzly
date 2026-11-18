@@ -1,0 +1,67 @@
+name: Corked blocking write timeout validation
+on:
+  push:
+    branches: [ 'ci/pr-2369-review-*' ]
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [fixed, reverted]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Maven
+        run: |
+          curl --fail --silent --show-error -o /tmp/maven.tar.gz https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/apache-maven-3.9.16-bin.tar.gz
+          tar -xzf /tmp/maven.tar.gz -C /tmp
+          echo '/tmp/apache-maven-3.9.16/bin' >> "$GITHUB_PATH"
+      - name: Revert only the timeout fix
+        if: matrix.variant == 'reverted'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('modules/grizzly/src/main/java/org/glassfish/grizzly/nio/tmpselectors/TemporarySelectorWriter.java')
+          s = p.read_text()
+          assert s.count('if (timeout > 0)') == 1
+          p.write_text(s.replace('if (timeout > 0)', 'if (timeout >= 0)'))
+          PY
+      - name: Build test dependencies
+        run: mvn -B -ntp -pl modules/grizzly -am -DskipTests install
+      - name: Run regression tests
+        id: tests
+        continue-on-error: true
+        run: mvn -B -ntp -pl modules/grizzly -Dtest=CorkedWritesTest#blockingWriteWithZeroTimeoutWaitsForQueuedWrites+blockingWriteWithPositiveTimeoutClosesConnection -DforkCount=1 -DreuseForks=false test
+      - name: Check regression result
+        env:
+          VARIANT: ${{ matrix.variant }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          python3 - <<'PY'
+          import glob, os, xml.etree.ElementTree as ET
+          reports = glob.glob('modules/grizzly/target/surefire-reports/TEST-*CorkedWritesTest.xml')
+          assert reports, 'Missing test reports'
+          failed = set()
+          count = 0
+          for report in reports:
+              for case in ET.parse(report).iter('testcase'):
+                  if case.find('skipped') is None:
+                      count += 1
+                  if case.find('failure') is not None or case.find('error') is not None:
+                      failed.add(case.attrib['name'])
+          print('Variant:', os.environ['VARIANT'], 'Tests:', count, 'Failed:', sorted(failed))
+          assert count == 2, count
+          if os.environ['VARIANT'] == 'fixed':
+              assert os.environ['TEST_OUTCOME'] == 'success' and not failed, failed
+          else:
+              assert failed == {'blockingWriteWithZeroTimeoutWaitsForQueuedWrites'}, failed
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: timeout-reports-${{ matrix.variant }}
+          path: modules/grizzly/target/surefire-reports/
