@@ -19,6 +19,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Install Maven 3.9.16
+        run: |
+          curl --fail --silent --show-error -o /tmp/maven.tar.gz https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/apache-maven-3.9.16-bin.tar.gz
+          tar -xzf /tmp/maven.tar.gz -C /tmp
+          echo '/tmp/apache-maven-3.9.16/bin' >> "$GITHUB_PATH"
       - name: Restore the production code under test
         env:
           VARIANT: ${{ matrix.variant }}
